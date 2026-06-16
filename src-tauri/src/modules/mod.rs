@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod fs;
 pub mod git;
+pub mod herdr;
 pub mod history;
 pub mod net;
 pub mod proc;
