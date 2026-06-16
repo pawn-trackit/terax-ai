@@ -33,6 +33,7 @@ import {
   type EditorPaneHandle,
 } from "@/modules/editor";
 import { FileExplorer, type FileExplorerHandle } from "@/modules/explorer";
+import { useHerdrWorktree } from "@/modules/herdr";
 import type { GitHistorySearchHandle } from "@/modules/git-history";
 import {
   Header,
@@ -303,11 +304,13 @@ export default function App() {
   useEditorFileSync({ tabs, tabsRef, editorRefs });
   useThemeFileEditing({ tabsRef, openFileTab });
 
-  const { explorerRoot, inheritedCwdForNewTab } = useWorkspaceCwd(
-    activeTab,
-    tabs,
-    launchCwd ?? home,
-  );
+  const { explorerRoot: derivedExplorerRoot, inheritedCwdForNewTab } =
+    useWorkspaceCwd(activeTab, tabs, launchCwd ?? home);
+  // [herdr] The sidebar + source-control follow herdr's focused workspace
+  // (= git worktree root). When herdr is absent/unknown the hook returns null,
+  // so we fall back to terax's own shell-derived cwd unchanged.
+  const herdrWorktree = useHerdrWorktree();
+  const explorerRoot = herdrWorktree ?? derivedExplorerRoot;
 
   useWindowTitle(activeTab, explorerRoot);
 
@@ -583,7 +586,9 @@ export default function App() {
     useSourceControlContext({
       activeTab,
       tabs,
-      activeTerminalLeafCwd,
+      // [herdr] make the focused worktree authoritative for source-control too,
+      // overriding the active terminal's own cwd (which otherwise wins here).
+      activeTerminalLeafCwd: herdrWorktree ?? activeTerminalLeafCwd,
       explorerRoot,
       launchCwd,
       launchCwdResolved,
