@@ -1,16 +1,13 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { AiDiffStatus } from "@/modules/tabs";
-import { presentableDiff, unifiedMergeView } from "@codemirror/merge";
-import { EditorState, type Extension } from "@codemirror/state";
+import { presentableDiff } from "@codemirror/merge";
 import { EditorView } from "@codemirror/view";
 import { Cancel01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
-import { useEffect, useMemo, useRef } from "react";
-import { buildSharedExtensions, languageCompartment } from "./lib/extensions";
-import { resolveLanguage, resolveLanguageSync } from "./lib/languageResolver";
+import { useMemo } from "react";
 import { useEditorThemeExt } from "./lib/useEditorThemeExt";
+import { SideBySideDiff } from "./SideBySideDiff";
 
 type Props = {
   path: string;
@@ -21,12 +18,6 @@ type Props = {
   onAccept: () => void;
   onReject: () => void;
 };
-
-const SHARED_EXT: Extension[] = buildSharedExtensions();
-const READONLY_EXT: Extension[] = [
-  EditorState.readOnly.of(true),
-  EditorView.editable.of(false),
-];
 
 const DIFF_THEME = EditorView.theme({
   // ".cm-changedLine": {
@@ -90,43 +81,7 @@ export function AiDiffPane({
   onAccept,
   onReject,
 }: Props) {
-  const cmRef = useRef<ReactCodeMirrorRef>(null);
   const themeExt = useEditorThemeExt();
-
-  const initialLang = useMemo(() => resolveLanguageSync(path), [path]);
-  const extensions = useMemo(
-    () => [
-      ...SHARED_EXT,
-      languageCompartment.of(initialLang?.ext ?? []),
-      ...READONLY_EXT,
-      unifiedMergeView({
-        original: originalContent,
-        mergeControls: false,
-        highlightChanges: true,
-        gutter: true,
-        syntaxHighlightDeletions: true,
-        collapseUnchanged: { margin: 3, minSize: 6 },
-      }),
-      DIFF_THEME,
-    ],
-    [originalContent, initialLang],
-  );
-
-  useEffect(() => {
-    if (initialLang) return;
-    let cancelled = false;
-    resolveLanguage(path).then((res) => {
-      if (cancelled) return;
-      const view = cmRef.current?.view;
-      if (!view) return;
-      view.dispatch({
-        effects: languageCompartment.reconfigure(res?.ext ?? []),
-      });
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [path, initialLang]);
 
   const stats = useMemo(
     () => computeLineStats(originalContent, proposedContent),
@@ -188,21 +143,12 @@ export function AiDiffPane({
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden">
-        <CodeMirror
-          ref={cmRef}
-          value={proposedContent}
-          theme={themeExt}
-          extensions={extensions}
-          editable={false}
-          height="100%"
-          className="h-full"
-          basicSetup={{
-            lineNumbers: true,
-            foldGutter: true,
-            highlightActiveLine: false,
-            highlightActiveLineGutter: false,
-            searchKeymap: true,
-          }}
+        <SideBySideDiff
+          originalContent={originalContent}
+          modifiedContent={proposedContent}
+          path={path}
+          themeExt={themeExt}
+          diffTheme={DIFF_THEME}
         />
       </div>
     </div>

@@ -1,12 +1,8 @@
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
-import { unifiedMergeView } from "@codemirror/merge";
-import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { buildSharedExtensions, languageCompartment } from "./lib/extensions";
+import { useEffect, useMemo, useState } from "react";
 import {
   fetchCommitDiff,
   fetchWorkingDiff,
@@ -14,8 +10,8 @@ import {
   workingDiffKey,
   commitDiffKey,
 } from "./lib/diffCache";
-import { resolveLanguage, resolveLanguageSync } from "./lib/languageResolver";
 import { useEditorThemeExt } from "./lib/useEditorThemeExt";
+import { SideBySideDiff } from "./SideBySideDiff";
 
 type WorkingSource = {
   kind: "working";
@@ -41,11 +37,6 @@ type Props = {
 
 const LARGE_FILE_THRESHOLD = 256 * 1024;
 
-const SHARED_EXT = buildSharedExtensions();
-const READONLY_EXT = [
-  EditorState.readOnly.of(true),
-  EditorView.editable.of(false),
-];
 const DIFF_THEME = EditorView.theme({
   "&.cm-merge-b .cm-changedText, .cm-changedText": {
     background: "rgba(110, 200, 120, 0.20) !important",
@@ -125,7 +116,6 @@ function loadStateFromCache(
 }
 
 export function GitDiffPane({ source, chipLabel, active }: Props) {
-  const cmRef = useRef<ReactCodeMirrorRef>(null);
   const themeExt = useEditorThemeExt();
   const [state, setState] = useState<LoadState>(() =>
     active ? loadStateFromCache(source) : { kind: "idle" },
@@ -196,48 +186,6 @@ export function GitDiffPane({ source, chipLabel, active }: Props) {
     modifiedContent.length > LARGE_FILE_THRESHOLD;
   const useFallback = isBinary || isTooLarge;
 
-  const initialLang = useMemo(() => resolveLanguageSync(path), [path]);
-  const extensions = useMemo(
-    () => [
-      ...SHARED_EXT,
-      languageCompartment.of(initialLang?.ext ?? []),
-      ...READONLY_EXT,
-      unifiedMergeView({
-        original: originalContent,
-        mergeControls: false,
-        highlightChanges: true,
-        gutter: true,
-        syntaxHighlightDeletions: true,
-        collapseUnchanged: { margin: 3, minSize: 6 },
-      }),
-      DIFF_THEME,
-    ],
-    [originalContent, initialLang],
-  );
-
-  // Resolve and apply syntax highlighting asynchronously when the language pack
-  // isn't cached yet. This must wait until the editor is actually mounted
-  // (state === "loaded"): the pane renders a spinner while the diff loads, so if
-  // the language import resolved first the view would be null and the reconfigure
-  // would be silently dropped — leaving the diff unhighlighted until a remount.
-  // Keying on `state.kind` re-runs this once the view exists.
-  useEffect(() => {
-    if (useFallback || initialLang) return;
-    if (state.kind !== "loaded") return;
-    let cancelled = false;
-    resolveLanguage(path).then((res) => {
-      if (cancelled) return;
-      const view = cmRef.current?.view;
-      if (!view) return;
-      view.dispatch({
-        effects: languageCompartment.reconfigure(res?.ext ?? []),
-      });
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [useFallback, path, initialLang, state.kind]);
-
   const stats = useMemo(
     () => (useFallback ? countDiffLines(fallbackPatch) : { added: 0, removed: 0 }),
     [useFallback, fallbackPatch],
@@ -301,21 +249,12 @@ export function GitDiffPane({ source, chipLabel, active }: Props) {
             </pre>
           </ScrollArea>
         ) : (
-          <CodeMirror
-            ref={cmRef}
-            value={modifiedContent}
-            theme={themeExt}
-            extensions={extensions}
-            editable={false}
-            height="100%"
-            className="h-full"
-            basicSetup={{
-              lineNumbers: true,
-              foldGutter: true,
-              highlightActiveLine: false,
-              highlightActiveLineGutter: false,
-              searchKeymap: true,
-            }}
+          <SideBySideDiff
+            originalContent={originalContent}
+            modifiedContent={modifiedContent}
+            path={path}
+            themeExt={themeExt}
+            diffTheme={DIFF_THEME}
           />
         )}
       </div>
