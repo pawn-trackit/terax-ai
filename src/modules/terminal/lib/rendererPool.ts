@@ -195,6 +195,42 @@ export function applyBackgroundActive(active: boolean): void {
   }
 }
 
+// [herdr] In a TUI (alternate screen, mouse mode) xterm forwards exactly ONE
+// mouse-wheel event to the app per physical wheel notch — it does not scale by
+// scroll amount, and `scrollSensitivity` only affects local scrollback. So
+// herdr scrolls ~1 line/notch where a native terminal (ghostty) sends ~3.
+// Re-dispatch synthetic wheel events so each notch forwards ~3 to the app,
+// matching ghostty's feel. Normal-screen scrollback is local + already fine.
+const TUI_SCROLL_NOTCH_LINES = 3;
+
+function attachScrollAmplifier(term: Terminal, host: HTMLElement): void {
+  host.addEventListener(
+    "wheel",
+    (e) => {
+      const we = e as WheelEvent & { __teraxAmp?: boolean };
+      if (we.__teraxAmp || we.deltaY === 0) return;
+      if (term.buffer.active.type !== "alternate") return;
+      const target = e.target as Element | null;
+      if (!target) return;
+      for (let i = 1; i < TUI_SCROLL_NOTCH_LINES; i++) {
+        const synth = new WheelEvent("wheel", {
+          deltaX: we.deltaX,
+          deltaY: we.deltaY,
+          deltaZ: we.deltaZ,
+          deltaMode: we.deltaMode,
+          clientX: we.clientX,
+          clientY: we.clientY,
+          bubbles: true,
+          cancelable: true,
+        }) as WheelEvent & { __teraxAmp?: boolean };
+        synth.__teraxAmp = true;
+        target.dispatchEvent(synth);
+      }
+    },
+    { capture: true },
+  );
+}
+
 function createSlot(): Slot {
   const term = new Terminal(termOptions());
   const fitAddon = new FitAddon();
@@ -212,6 +248,7 @@ function createSlot(): Slot {
   host.setAttribute("data-terax-slot", String(slots.length));
   getRecycler().appendChild(host);
   term.open(host);
+  attachScrollAmplifier(term, host);
 
   const slot: Slot = {
     id: slots.length,
