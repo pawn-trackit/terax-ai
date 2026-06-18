@@ -8,11 +8,13 @@ export const catppuccin: Theme = {
   variants: {
     dark: {
       colors: {
-        background: "#1e1e2e",
+        // [herdr] lifted slate (≈ ghostty's catppuccin-over-blurred-wallpaper
+        // apparent tone) so the opaque background reads like ghostty's glass.
+        background: "#252e3d",
         foreground: "#cdd6f4",
-        card: "#181825",
+        card: "#1f2733",
         cardForeground: "#cdd6f4",
-        popover: "#181825",
+        popover: "#1f2733",
         popoverForeground: "#cdd6f4",
         primary: "#cba6f7",
         primaryForeground: "#1e1e2e",
@@ -26,7 +28,7 @@ export const catppuccin: Theme = {
         border: "rgba(205,214,244,0.10)",
         input: "rgba(205,214,244,0.14)",
         ring: "#cba6f7",
-        sidebar: "#181825",
+        sidebar: "#1f2733",
         sidebarForeground: "#cdd6f4",
         sidebarPrimary: "#cba6f7",
         sidebarPrimaryForeground: "#1e1e2e",
@@ -36,6 +38,7 @@ export const catppuccin: Theme = {
         sidebarRing: "#cba6f7",
       },
       terminal: {
+        background: "#252e3d",
         cursor: "#f5e0dc",
         cursorAccent: "#1e1e2e",
         selection: "rgba(203,166,247,0.25)",
@@ -77,6 +80,7 @@ export const catppuccin: Theme = {
         sidebarRing: "#8839ef",
       },
       terminal: {
+        background: "#eff1f5",
         cursor: "#4c4f69",
         cursorAccent: "#eff1f5",
         selection: "rgba(136,57,239,0.20)",
