@@ -19,11 +19,15 @@ export function useHerdrWorktree(): string | null {
 
     resolveHerdrWorktree()
       .then((focus) => {
-        if (!cancelled && focus) setRoot(focus.root);
+        if (!cancelled && focus?.root) setRoot(focus.root);
       })
       .catch(() => {});
 
-    onHerdrFocusChanged((focus) => setRoot(focus.root))
+    // Ignore empty roots so a stale-but-valid worktree is never clobbered by a
+    // blank one (which would blank the sidebar).
+    onHerdrFocusChanged((focus) => {
+      if (focus.root) setRoot(focus.root);
+    })
       .then((un) => {
         if (cancelled) un();
         else unlisten = un;

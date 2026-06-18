@@ -160,6 +160,17 @@ fn apply_common(cmd: &mut CommandBuilder, cwd: Option<String>, blocks: bool) {
     }
     ensure_utf8_locale(cmd);
 
+    // [herdr] strip herdr's session env so the user can run `herdr` INSIDE
+    // terax's own terminal — nested herdr aborts when it inherits HERDR_ENV.
+    // Without this the "one window" workflow (herdr running in the app's
+    // terminal) is impossible whenever terax itself was launched from a herdr
+    // session.
+    for (key, _) in std::env::vars() {
+        if key.starts_with("HERDR_") {
+            cmd.env_remove(&key);
+        }
+    }
+
     let resolved_cwd = cwd
         .map(PathBuf::from)
         .filter(|p| p.is_dir())

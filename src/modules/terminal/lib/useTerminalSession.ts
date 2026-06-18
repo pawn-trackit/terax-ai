@@ -1,4 +1,5 @@
 import { ensureMonoFontsLoaded } from "@/lib/fonts";
+import { noteLeafCommand } from "@/modules/herdr";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { invoke } from "@tauri-apps/api/core";
 import type { SearchAddon } from "@xterm/addon-search";
@@ -632,8 +633,15 @@ function bindLeafToSlot(leafId: number, s: Session): void {
       // 7 emitted by untrusted command output (remote SSH, `cat` of an
       // attacker file, etc.).
       const shellState = createShellIntegrationState();
-      const prompt = registerPromptTracker(term, shellState, (running) =>
-        onLeafCommandState(leafId, running),
+      const prompt = registerPromptTracker(
+        term,
+        shellState,
+        (running, command) => {
+          onLeafCommandState(leafId, running);
+          // [herdr] flag this leaf when herdr is its foreground command, so the
+          // sidebar follows herdr's worktree only from the pane running herdr.
+          noteLeafCommand(leafId, running, command);
+        },
       );
       const cwd = registerCwdHandler(
         term,

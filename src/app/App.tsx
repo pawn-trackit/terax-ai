@@ -33,7 +33,7 @@ import {
   type EditorPaneHandle,
 } from "@/modules/editor";
 import { FileExplorer, type FileExplorerHandle } from "@/modules/explorer";
-import { useHerdrWorktree } from "@/modules/herdr";
+import { useHerdrWorktree, useLeafIsPlainShell } from "@/modules/herdr";
 import type { GitHistorySearchHandle } from "@/modules/git-history";
 import {
   Header,
@@ -310,7 +310,22 @@ export default function App() {
   // (= git worktree root). When herdr is absent/unknown the hook returns null,
   // so we fall back to terax's own shell-derived cwd unchanged.
   const herdrWorktree = useHerdrWorktree();
-  const explorerRoot = herdrWorktree ?? derivedExplorerRoot;
+  // herdr is a background daemon (always reports a focus), so an unconditional
+  // override would freeze the sidebar. Scope herdr's authority: it loses to the
+  // terminal's own cwd ONLY when the active pane is a known plain (non-herdr)
+  // shell. The herdr pane, editor/markdown tabs, and shells we can't read
+  // commands from keep following herdr's worktree — so terminal `cd`/tab-switch
+  // moves the sidebar without breaking the herdr binding.
+  const activeLeafIsPlainShell = useLeafIsPlainShell(
+    activeTab?.kind === "terminal" ? activeTab.activeLeafId : null,
+  );
+  const inPlainTerminal =
+    activeTab?.kind === "terminal" && activeLeafIsPlainShell;
+  // `!herdrWorktree` guards an empty root: `?? derivedExplorerRoot` only catches
+  // null/undefined, so an empty string would blank the sidebar.
+  const herdrAuthoritative =
+    inPlainTerminal || !herdrWorktree ? null : herdrWorktree;
+  const explorerRoot = herdrAuthoritative ?? derivedExplorerRoot;
 
   useWindowTitle(activeTab, explorerRoot);
 
@@ -587,8 +602,8 @@ export default function App() {
       activeTab,
       tabs,
       // [herdr] make the focused worktree authoritative for source-control too,
-      // overriding the active terminal's own cwd (which otherwise wins here).
-      activeTerminalLeafCwd: herdrWorktree ?? activeTerminalLeafCwd,
+      // except when actively in a non-herdr terminal (then its own cwd wins).
+      activeTerminalLeafCwd: herdrAuthoritative ?? activeTerminalLeafCwd,
       explorerRoot,
       launchCwd,
       launchCwdResolved,

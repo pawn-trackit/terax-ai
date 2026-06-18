@@ -44,7 +44,14 @@ async fn one_shot<T: DeserializeOwned>(path: &Path, method: &str) -> Result<T, S
 async fn resolve(path: &Path) -> Option<FocusInfo> {
     let wl: WorkspaceListResult = one_shot(path, "workspace.list").await.ok()?;
     let ws = wl.workspaces.into_iter().find(|w| w.focused)?;
-    if let Some(root) = ws.worktree.and_then(|w| w.checkout_path) {
+    // Reject empty roots: an empty `checkout_path`/`cwd` (e.g. a freshly created
+    // pane mid-startup when herdr is re-launched) would otherwise emit root="",
+    // which the frontend's `?? cwd` fallback can't catch → the sidebar blanks.
+    if let Some(root) = ws
+        .worktree
+        .and_then(|w| w.checkout_path)
+        .filter(|p| !p.is_empty())
+    {
         return Some(FocusInfo {
             root,
             label: ws.label,
@@ -53,7 +60,12 @@ async fn resolve(path: &Path) -> Option<FocusInfo> {
         });
     }
     let pl: PaneListResult = one_shot(path, "pane.list").await.ok()?;
-    let cwd = pl.panes.into_iter().find(|p| p.focused).and_then(|p| p.cwd)?;
+    let cwd = pl
+        .panes
+        .into_iter()
+        .find(|p| p.focused)
+        .and_then(|p| p.cwd)
+        .filter(|c| !c.is_empty())?;
     Some(FocusInfo {
         root: cwd,
         label: ws.label,

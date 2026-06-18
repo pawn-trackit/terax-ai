@@ -47,7 +47,9 @@ export function registerPromptTracker(
   state?: ShellIntegrationState,
   // Fires on C (process executing) and A/D (back at prompt). Distinct from
   // inCommand, which is already true from B while the user merely types.
-  onCommandState?: (running: boolean) => void,
+  // On C the command line (after the `C;` prefix) is passed through so callers
+  // can tell *which* command is in the foreground (e.g. herdr).
+  onCommandState?: (running: boolean, command?: string) => void,
 ): PromptTracker {
   let marker: IMarker | null = null;
   const d = term.parser.registerOscHandler(133, (data) => {
@@ -63,8 +65,9 @@ export function registerPromptTracker(
       if (state) state.inCommand = true;
     } else if (data.startsWith("C")) {
       // OSC 133 C — command pre-execution marker; still inside command.
+      // Payload is `C;<command line>` (see the shell-integration preexec hook).
       if (state) state.inCommand = true;
-      onCommandState?.(true);
+      onCommandState?.(true, data.startsWith("C;") ? data.slice(2) : "");
     } else if (data.startsWith("D")) {
       // OSC 133 D — command ends.
       if (state) state.inCommand = false;

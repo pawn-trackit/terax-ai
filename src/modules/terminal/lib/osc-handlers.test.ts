@@ -129,7 +129,7 @@ describe("OSC 133 command-state tracking", () => {
     handlers.get(133)?.("B");
     expect(onCommandState).toHaveBeenCalledTimes(1);
     handlers.get(133)?.("C;claude");
-    expect(onCommandState).toHaveBeenLastCalledWith(true);
+    expect(onCommandState).toHaveBeenLastCalledWith(true, "claude");
     handlers.get(133)?.("D;0");
     expect(onCommandState).toHaveBeenLastCalledWith(false);
   });
@@ -140,9 +140,18 @@ describe("OSC 133 command-state tracking", () => {
     registerPromptTracker(term, undefined, onCommandState);
 
     handlers.get(133)?.("C;vim");
-    expect(onCommandState).toHaveBeenLastCalledWith(true);
+    expect(onCommandState).toHaveBeenLastCalledWith(true, "vim");
     handlers.get(133)?.("A");
     expect(onCommandState).toHaveBeenLastCalledWith(false);
+  });
+
+  it("passes an empty command for a bare C (no command payload, e.g. bash)", () => {
+    const { term, handlers } = makeFakeTerm();
+    const onCommandState = vi.fn();
+    registerPromptTracker(term, undefined, onCommandState);
+
+    handlers.get(133)?.("C");
+    expect(onCommandState).toHaveBeenLastCalledWith(true, "");
   });
 });
 
