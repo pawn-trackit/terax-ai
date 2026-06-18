@@ -1,7 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
-import { EditorView } from "@codemirror/view";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 import { useEffect, useMemo, useState } from "react";
 import {
   fetchCommitDiff,
@@ -10,8 +10,10 @@ import {
   workingDiffKey,
   commitDiffKey,
 } from "./lib/diffCache";
+import { sideBySideDiffTheme } from "./lib/diffThemes";
 import { useEditorThemeExt } from "./lib/useEditorThemeExt";
 import { SideBySideDiff } from "./SideBySideDiff";
+import { UnifiedDiff } from "./UnifiedDiff";
 
 type WorkingSource = {
   kind: "working";
@@ -36,44 +38,6 @@ type Props = {
 };
 
 const LARGE_FILE_THRESHOLD = 256 * 1024;
-
-const DIFF_THEME = EditorView.theme({
-  "&.cm-merge-b .cm-changedText, .cm-changedText": {
-    background: "rgba(110, 200, 120, 0.20) !important",
-    borderRadius: "3px",
-    padding: "0 1px",
-  },
-  ".cm-deletedChunk .cm-deletedText, &.cm-merge-b .cm-deletedText": {
-    background: "rgba(220, 90, 90, 0.22) !important",
-    borderRadius: "3px",
-    padding: "0 1px",
-  },
-  "&.cm-merge-b .cm-changedLine, .cm-changedLine, .cm-inlineChangedLine": {
-    backgroundColor: "rgba(110, 200, 120, 0.05) !important",
-  },
-  ".cm-deletedChunk": {
-    backgroundColor: "rgba(220, 90, 90, 0.05) !important",
-    paddingTop: "1px",
-    paddingBottom: "1px",
-  },
-  "&.cm-merge-b .cm-changedLineGutter, .cm-changedLineGutter": {
-    background: "rgba(110, 200, 120, 0.55) !important",
-  },
-  ".cm-deletedLineGutter, &.cm-merge-a .cm-changedLineGutter": {
-    background: "rgba(220, 90, 90, 0.5) !important",
-  },
-  ".cm-changeGutter": {
-    width: "2px !important",
-    paddingLeft: "0 !important",
-  },
-  ".cm-collapsedLines": {
-    backgroundColor: "transparent",
-    color: "var(--muted-foreground, #9ca3af)",
-    fontSize: "10.5px",
-    padding: "2px 8px",
-    opacity: 0.7,
-  },
-});
 
 function countDiffLines(patch: string): { added: number; removed: number } {
   let added = 0;
@@ -117,6 +81,8 @@ function loadStateFromCache(
 
 export function GitDiffPane({ source, chipLabel, active }: Props) {
   const themeExt = useEditorThemeExt();
+  const collapseUnchanged = usePreferencesStore((s) => s.diffCollapseUnchanged);
+  const diffSideBySide = usePreferencesStore((s) => s.diffSideBySide);
   const [state, setState] = useState<LoadState>(() =>
     active ? loadStateFromCache(source) : { kind: "idle" },
   );
@@ -248,13 +214,22 @@ export function GitDiffPane({ source, chipLabel, active }: Props) {
               {fallbackPatch || "Diff preview is not available for this file."}
             </pre>
           </ScrollArea>
-        ) : (
+        ) : diffSideBySide ? (
           <SideBySideDiff
             originalContent={originalContent}
             modifiedContent={modifiedContent}
             path={path}
             themeExt={themeExt}
-            diffTheme={DIFF_THEME}
+            diffTheme={sideBySideDiffTheme}
+            collapseUnchanged={collapseUnchanged}
+          />
+        ) : (
+          <UnifiedDiff
+            originalContent={originalContent}
+            modifiedContent={modifiedContent}
+            path={path}
+            themeExt={themeExt}
+            collapseUnchanged={collapseUnchanged}
           />
         )}
       </div>

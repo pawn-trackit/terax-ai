@@ -1,13 +1,15 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 import type { AiDiffStatus } from "@/modules/tabs";
 import { presentableDiff } from "@codemirror/merge";
-import { EditorView } from "@codemirror/view";
 import { Cancel01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useMemo } from "react";
+import { sideBySideDiffTheme } from "./lib/diffThemes";
 import { useEditorThemeExt } from "./lib/useEditorThemeExt";
 import { SideBySideDiff } from "./SideBySideDiff";
+import { UnifiedDiff } from "./UnifiedDiff";
 
 type Props = {
   path: string;
@@ -18,44 +20,6 @@ type Props = {
   onAccept: () => void;
   onReject: () => void;
 };
-
-const DIFF_THEME = EditorView.theme({
-  // ".cm-changedLine": {
-  //   backgroundColor:
-  //     "color-mix(in srgb, #22c55e 10%, transparent) !important",
-  // },
-  // ".cm-merge-b .cm-changedText, .cm-merge-b ins.cm-insertedLine": {
-  //   background:
-  //     "color-mix(in srgb, #22c55e 28%, transparent) !important",
-  //   textDecoration: "none !important",
-  //   borderRadius: "2px",
-  // },
-  // ".cm-deletedChunk": {
-  //   backgroundColor:
-  //     "color-mix(in srgb, #ef4444 8%, transparent)",
-  //   paddingLeft: "6px",
-  //   paddingTop: "1px",
-  //   paddingBottom: "1px",
-  // },
-  // ".cm-deletedChunk .cm-deletedText, .cm-deletedLine del": {
-  //   background:
-  //     "color-mix(in srgb, #ef4444 26%, transparent) !important",
-  //   textDecoration: "none !important",
-  //   borderRadius: "2px",
-  // },
-  // ".cm-changeGutter": {
-  //   width: "3px",
-  // },
-  // ".cm-changedLineGutter": {
-  //   backgroundColor: "#22c55e",
-  // },
-  // ".cm-deletedLineGutter": {
-  //   backgroundColor: "#ef4444",
-  // },
-  ".cm-changedText": {
-    background: "#88ff881a !important",
-  },
-});
 
 const STATUS_LABEL: Record<AiDiffStatus, string> = {
   pending: "Pending review",
@@ -82,6 +46,8 @@ export function AiDiffPane({
   onReject,
 }: Props) {
   const themeExt = useEditorThemeExt();
+  const collapseUnchanged = usePreferencesStore((s) => s.diffCollapseUnchanged);
+  const diffSideBySide = usePreferencesStore((s) => s.diffSideBySide);
 
   const stats = useMemo(
     () => computeLineStats(originalContent, proposedContent),
@@ -143,13 +109,24 @@ export function AiDiffPane({
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden">
-        <SideBySideDiff
-          originalContent={originalContent}
-          modifiedContent={proposedContent}
-          path={path}
-          themeExt={themeExt}
-          diffTheme={DIFF_THEME}
-        />
+        {diffSideBySide ? (
+          <SideBySideDiff
+            originalContent={originalContent}
+            modifiedContent={proposedContent}
+            path={path}
+            themeExt={themeExt}
+            diffTheme={sideBySideDiffTheme}
+            collapseUnchanged={collapseUnchanged}
+          />
+        ) : (
+          <UnifiedDiff
+            originalContent={originalContent}
+            modifiedContent={proposedContent}
+            path={path}
+            themeExt={themeExt}
+            collapseUnchanged={collapseUnchanged}
+          />
+        )}
       </div>
     </div>
   );
