@@ -151,6 +151,42 @@ function statusAccent(code: string): string {
   }
 }
 
+// Bright per-status letter (A/M/D/R/U) shown at the row's right edge — the 2px
+// accent bar alone is too subtle to tell added/modified/deleted apart.
+function statusLetterClass(code: string): string {
+  switch (code) {
+    case "A":
+      return "text-emerald-400";
+    case "U":
+      return "text-teal-400";
+    case "M":
+      return "text-amber-400";
+    case "D":
+      return "text-rose-400";
+    case "R":
+      return "text-sky-400";
+    default:
+      return "text-muted-foreground";
+  }
+}
+
+function statusTitle(code: string): string {
+  switch (code) {
+    case "A":
+      return "Added";
+    case "U":
+      return "Untracked / unmerged";
+    case "M":
+      return "Modified";
+    case "D":
+      return "Deleted";
+    case "R":
+      return "Renamed";
+    default:
+      return code;
+  }
+}
+
 function checkboxValue(state: CheckState): boolean | "indeterminate" {
   if (state === "checked") return true;
   if (state === "indeterminate") return "indeterminate";
@@ -1157,8 +1193,12 @@ const EntryRow = memo(function EntryRow({
           role="option"
           aria-selected={isSelected}
           onMouseDown={() => onFocusRow(row.key)}
+          onClick={() => {
+            onFocusRow(row.key);
+            void onSelectFile(entry);
+          }}
           className={cn(
-            "group relative flex h-[30px] items-center gap-2 rounded-md pl-2 pr-2 transition-all duration-100",
+            "group relative flex h-[30px] cursor-pointer items-center gap-2 rounded-md pl-2 pr-2 transition-all duration-100",
             focused
               ? "bg-accent/60"
               : isSelected
@@ -1172,18 +1212,11 @@ const EntryRow = memo(function EntryRow({
               statusAccent(entry.statusCode),
               isSelected || focused
                 ? "opacity-100"
-                : "opacity-55 group-hover:opacity-95",
+                : "opacity-90 group-hover:opacity-100",
             )}
             aria-hidden
           />
-          <button
-            type="button"
-            onClick={() => {
-              onFocusRow(row.key);
-              void onSelectFile(entry);
-            }}
-            className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
-          >
+          <div className="flex min-w-0 flex-1 items-center gap-2 text-left">
             {iconUrl ? (
               <img src={iconUrl} alt="" className="size-4 shrink-0" />
             ) : (
@@ -1207,10 +1240,13 @@ const EntryRow = memo(function EntryRow({
                 </span>
               ) : null}
             </div>
-          </button>
+          </div>
 
           {showDiscard ? (
-            <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100 data-[focused=true]:opacity-100 data-[selected=true]:opacity-100">
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100 data-[focused=true]:opacity-100 data-[selected=true]:opacity-100"
+            >
               <IconActionButton
                 label={`Discard ${entry.path}`}
                 disabled={disabled}
@@ -1230,7 +1266,21 @@ const EntryRow = memo(function EntryRow({
             </div>
           ) : null}
 
-          <span className="flex size-5 shrink-0 items-center justify-center">
+          <span
+            className={cn(
+              "w-3.5 shrink-0 text-center text-[11px] font-bold leading-none tabular-nums",
+              statusLetterClass(entry.statusCode),
+            )}
+            title={statusTitle(entry.statusCode)}
+            aria-hidden
+          >
+            {entry.statusCode}
+          </span>
+
+          <span
+            onClick={(e) => e.stopPropagation()}
+            className="flex size-5 shrink-0 items-center justify-center"
+          >
             {isStageBusy ? (
               <Spinner className="size-3" />
             ) : (
