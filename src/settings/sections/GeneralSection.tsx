@@ -21,6 +21,8 @@ import {
   setAgentNotifications,
   setAutostart,
   setDefaultWorkspaceEnv,
+  setDiffCollapseUnchanged,
+  setDiffSideBySide,
   setEditorAutoSave,
   setEditorAutoSaveDelay,
   setEditorWordWrap,
@@ -89,6 +91,10 @@ export function GeneralSection() {
   const editorWordWrap = usePreferencesStore((s) => s.editorWordWrap);
   const editorAutoSave = usePreferencesStore((s) => s.editorAutoSave);
   const editorAutoSaveDelay = usePreferencesStore((s) => s.editorAutoSaveDelay);
+  const diffCollapseUnchanged = usePreferencesStore(
+    (s) => s.diffCollapseUnchanged,
+  );
+  const diffSideBySide = usePreferencesStore((s) => s.diffSideBySide);
   const showHidden = usePreferencesStore((s) => s.showHidden);
   const explorerGitDecorations = usePreferencesStore(
     (s) => s.explorerGitDecorations,
@@ -231,6 +237,24 @@ export function GeneralSection() {
             onChange={(v) => void setEditorAutoSaveDelay(v)}
           />
         )}
+        <SettingRow
+          title="Side-by-side diff"
+          description="Show diffs in two columns (before / after). Off shows a single inline (unified) view."
+        >
+          <Switch
+            checked={diffSideBySide}
+            onCheckedChange={(v) => void setDiffSideBySide(v)}
+          />
+        </SettingRow>
+        <SettingRow
+          title="Collapse unchanged lines in diff"
+          description="In source-control and AI diffs, fold long stretches of unchanged lines outside the changed range. Off shows the whole file."
+        >
+          <Switch
+            checked={diffCollapseUnchanged}
+            onCheckedChange={(v) => void setDiffCollapseUnchanged(v)}
+          />
+        </SettingRow>
       </div>
 
       <div className="flex flex-col gap-2">
