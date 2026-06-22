@@ -1,9 +1,20 @@
+import { resolveFontFamily } from "@/lib/fonts";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 import { getChunks, unifiedMergeView } from "@codemirror/merge";
 import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { useEffect, useMemo, useRef } from "react";
 
+import {
+  brightenDiffSyntax,
+  DIFF_GREEN_LINE,
+  DIFF_GREEN_MARK,
+  DIFF_GREEN_TEXT,
+  DIFF_RED_LINE,
+  DIFF_RED_MARK,
+  DIFF_RED_TEXT,
+} from "./lib/diffThemes";
 import { buildSharedExtensions, languageCompartment } from "./lib/extensions";
 import { resolveLanguage, resolveLanguageSync } from "./lib/languageResolver";
 
@@ -18,33 +29,38 @@ const READONLY_EXT: Extension[] = [
 // panes can switch between the two on the `diffSideBySide` pref. Unlike the
 // two-editor MergeView, the unified view has no cm-merge-a/b sides, so changes
 // are themed by their own classes here (red removed, green added).
+// Saturated diff hues blended with the app background, matching SideBySideDiff
+// (see diffThemes.ts): the theme's ANSI vars resolve to catppuccin pastels at
+// runtime, so we use explicit saturated green/red to read deep like the terminal.
 const UNIFIED_DIFF_THEME = EditorView.theme({
   ".cm-changedText": {
-    background: "rgba(110, 200, 120, 0.20) !important",
+    background: `${DIFF_GREEN_TEXT} !important`,
     borderRadius: "3px",
     padding: "0 1px",
   },
   ".cm-changedLine": {
-    backgroundColor: "rgba(110, 200, 120, 0.06) !important",
+    backgroundColor: `${DIFF_GREEN_LINE} !important`,
   },
   ".cm-changedLineGutter": {
-    background: "rgba(110, 200, 120, 0.55) !important",
+    background: `${DIFF_GREEN_MARK} !important`,
   },
   ".cm-deletedChunk": {
-    backgroundColor: "rgba(220, 90, 90, 0.07) !important",
+    backgroundColor: `${DIFF_RED_LINE} !important`,
   },
   ".cm-deletedChunk .cm-deletedText, .cm-deletedText": {
-    background: "rgba(220, 90, 90, 0.22) !important",
+    background: `${DIFF_RED_TEXT} !important`,
     borderRadius: "3px",
     padding: "0 1px",
   },
   ".cm-deletedLineGutter": {
-    background: "rgba(220, 90, 90, 0.5) !important",
+    background: `${DIFF_RED_MARK} !important`,
   },
   ".cm-changeGutter": {
     width: "2px !important",
     paddingLeft: "0 !important",
   },
+  // Match SideBySideDiff: heavier strokes to close the canvas-vs-DOM gap.
+  ".cm-content": { fontWeight: "600" },
   ".cm-collapsedLines": {
     backgroundColor: "transparent",
     color: "var(--muted-foreground, #9ca3af)",
@@ -72,6 +88,11 @@ export function UnifiedDiff({
   const cmRef = useRef<ReactCodeMirrorRef>(null);
   const scrolledPathRef = useRef<string | null>(null);
   const initialLang = useMemo(() => resolveLanguageSync(path), [path]);
+  // Sync the diff font with the terminal (see SideBySideDiff).
+  const fontFamily = resolveFontFamily(
+    usePreferencesStore((s) => s.terminalFontFamily),
+  );
+  const terminalFontSize = usePreferencesStore((s) => s.terminalFontSize);
 
   const extensions = useMemo(
     () => [
@@ -89,8 +110,21 @@ export function UnifiedDiff({
           : undefined,
       }),
       UNIFIED_DIFF_THEME,
+      EditorView.theme({
+        ".cm-scroller": {
+          fontFamily,
+          fontSize: `calc(${terminalFontSize}px * var(--app-zoom, 1))`,
+        },
+      }),
+      brightenDiffSyntax,
     ],
-    [originalContent, initialLang, collapseUnchanged],
+    [
+      originalContent,
+      initialLang,
+      collapseUnchanged,
+      fontFamily,
+      terminalFontSize,
+    ],
   );
 
   // Resolve syntax highlighting asynchronously when the language pack isn't

@@ -1,9 +1,12 @@
+import { resolveFontFamily } from "@/lib/fonts";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 import { MergeView } from "@codemirror/merge";
 import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { useEffect, useRef, useState } from "react";
 
 import { DiffOverviewRuler } from "./DiffOverviewRuler";
+import { brightenDiffSyntax } from "./lib/diffThemes";
 import { buildSharedExtensions, languageCompartment } from "./lib/extensions";
 import { resolveLanguage, resolveLanguageSync } from "./lib/languageResolver";
 
@@ -38,6 +41,13 @@ export function SideBySideDiff({
   diffTheme,
   collapseUnchanged,
 }: Props) {
+  // Sync the diff font with the terminal so code reads consistently across both.
+  // terax's shared editor extensions otherwise pin the auto-detected mono font
+  // at a fixed 13px, ignoring the user's terminal font/size choice.
+  const fontFamily = resolveFontFamily(
+    usePreferencesStore((s) => s.terminalFontFamily),
+  );
+  const terminalFontSize = usePreferencesStore((s) => s.terminalFontSize);
   const mountRef = useRef<HTMLDivElement>(null);
   const mergeRef = useRef<MergeView | null>(null);
   // The overview ruler reads the live MergeView; geomVersion forces it to
@@ -69,12 +79,23 @@ export function SideBySideDiff({
     });
 
     const initialLang = resolveLanguageSync(path);
+    // Applied after SHARED_EXT so it wins: terminal font family + size (× zoom
+    // to match the app scale), overriding buildSharedExtensions' auto-detect
+    // font and fixed 13px.
+    const fontExt = EditorView.theme({
+      ".cm-scroller": {
+        fontFamily,
+        fontSize: `calc(${terminalFontSize}px * var(--app-zoom, 1))`,
+      },
+    });
     const sideExtensions = (forB: boolean): Extension[] => [
       ...SHARED_EXT,
       languageCompartment.of(initialLang ?? []),
       ...READONLY_EXT,
       themeExt,
       diffTheme,
+      fontExt,
+      brightenDiffSyntax,
       ...(forB ? [geomListener] : []),
     ];
 
@@ -131,7 +152,16 @@ export function SideBySideDiff({
       mergeRef.current = null;
       setMergeView(null);
     };
-  }, [originalContent, modifiedContent, path, themeExt, diffTheme, collapseUnchanged]);
+  }, [
+    originalContent,
+    modifiedContent,
+    path,
+    themeExt,
+    diffTheme,
+    collapseUnchanged,
+    fontFamily,
+    terminalFontSize,
+  ]);
 
   return (
     // zoom-exempt: render the merge subtree at net zoom 1.0 (the app zooms via
