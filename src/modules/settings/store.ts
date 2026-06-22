@@ -161,6 +161,7 @@ export type Preferences = {
   editorAutoSaveDelay: number;
   diffCollapseUnchanged: boolean;
   diffSideBySide: boolean;
+  scmTreeView: boolean;
 };
 
 const STORE_PATH = "terax-settings.json";
@@ -216,6 +217,7 @@ const KEY_EDITOR_AUTO_SAVE = "editorAutoSave";
 const KEY_EDITOR_AUTO_SAVE_DELAY = "editorAutoSaveDelay";
 const KEY_DIFF_COLLAPSE_UNCHANGED = "diffCollapseUnchanged";
 const KEY_DIFF_SIDE_BY_SIDE = "diffSideBySide";
+const KEY_SCM_TREE_VIEW = "scmTreeView";
 
 export const TERMINAL_FONT_SIZE_DEFAULT = 14;
 export const TERMINAL_FONT_SIZE_MIN = 8;
@@ -284,6 +286,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   editorAutoSaveDelay: 1000,
   diffCollapseUnchanged: false,
   diffSideBySide: true,
+  scmTreeView: false,
 };
 
 const store = new LazyStore(STORE_PATH, { defaults: {}, autoSave: 200 });
@@ -455,6 +458,8 @@ export async function loadPreferences(): Promise<Preferences> {
     diffSideBySide:
       get<boolean>(KEY_DIFF_SIDE_BY_SIDE) ??
       DEFAULT_PREFERENCES.diffSideBySide,
+    scmTreeView:
+      get<boolean>(KEY_SCM_TREE_VIEW) ?? DEFAULT_PREFERENCES.scmTreeView,
   };
 }
 
@@ -701,6 +706,10 @@ export async function setDiffSideBySide(value: boolean): Promise<void> {
   await writePref(KEY_DIFF_SIDE_BY_SIDE, value);
 }
 
+export async function setScmTreeView(value: boolean): Promise<void> {
+  await writePref(KEY_SCM_TREE_VIEW, value);
+}
+
 export async function setAgentNotifications(value: boolean): Promise<void> {
   await writePref(KEY_AGENT_NOTIFICATIONS, value);
 }
@@ -777,6 +786,7 @@ export async function onPreferencesChange(
     [KEY_EDITOR_AUTO_SAVE_DELAY]: "editorAutoSaveDelay",
     [KEY_DIFF_COLLAPSE_UNCHANGED]: "diffCollapseUnchanged",
     [KEY_DIFF_SIDE_BY_SIDE]: "diffSideBySide",
+    [KEY_SCM_TREE_VIEW]: "scmTreeView",
   };
   // Same-process writes still fire onChange immediately; cross-window writes
   // arrive via the Tauri event emitted by writePref().

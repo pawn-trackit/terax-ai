@@ -48,6 +48,8 @@ import {
   COMPACT_ITEM,
 } from "@/modules/explorer/lib/menuItemClass";
 import { joinPath } from "@/modules/explorer/lib/useFileTree";
+import { usePreferencesStore } from "@/modules/settings/preferences";
+import { setScmTreeView } from "@/modules/settings/store";
 import {
   AiContentGenerator02Icon,
   Alert02Icon,
@@ -59,7 +61,9 @@ import {
   Folder01Icon,
   FolderCloudIcon,
   FolderGitTwoIcon,
+  FolderTreeIcon,
   GitBranchIcon,
+  LeftToRightListBulletIcon,
   Refresh01Icon,
   RemoveSquareIcon,
   Tick02Icon,
@@ -76,6 +80,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import { buildScmTree } from "./scmTree";
 import type { SourceControlSummary } from "./useSourceControl";
 import {
   useSourceControlPanel,
@@ -110,7 +115,26 @@ const ROW_HEIGHTS = {
 type RowDescriptor =
   | { kind: "banner-diverged"; key: string }
   | { kind: "list-header"; key: string; count: number }
-  | { kind: "entry"; key: string; entry: SourceControlFileEntry };
+  | {
+      kind: "tree-folder";
+      key: string;
+      path: string;
+      label: string;
+      depth: number;
+      collapsed: boolean;
+    }
+  | {
+      kind: "entry";
+      key: string;
+      entry: SourceControlFileEntry;
+      depth: number;
+      showPath: boolean;
+    };
+
+// Indentation per tree depth; matches the row's base left padding (pl-2 = 8px)
+// at depth 0 so the flat list looks unchanged.
+const TREE_INDENT_STEP = 12;
+const ROW_BASE_PADDING = 8;
 
 function basename(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
@@ -391,6 +415,25 @@ export const SourceControlPanel = memo(function SourceControlPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [focusedRowKey, setFocusedRowKey] = useState<string | null>(null);
+  const treeView = usePreferencesStore((s) => s.scmTreeView);
+  // Which folders are collapsed in tree view, keyed by the folder's deepest
+  // path. Ephemeral (resets on reload) — simplest behavior that's still useful.
+  const [collapsedFolders, setCollapsedFolders] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+
+  const toggleFolder = useCallback((path: string) => {
+    setCollapsedFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }, []);
+
+  const toggleView = useCallback(() => {
+    void setScmTreeView(!treeView);
+  }, [treeView]);
 
   useEffect(() => {
     return () => {
@@ -504,12 +547,41 @@ export const SourceControlPanel = memo(function SourceControlPanel({
         key: "list-header",
         count: changedCount,
       });
-      for (const entry of scm.fileEntries) {
-        result.push({ kind: "entry", key: entry.key, entry });
+      if (treeView) {
+        for (const node of buildScmTree(scm.fileEntries, collapsedFolders)) {
+          if (node.kind === "folder") {
+            result.push({
+              kind: "tree-folder",
+              key: node.key,
+              path: node.path,
+              label: node.label,
+              depth: node.depth,
+              collapsed: node.collapsed,
+            });
+          } else {
+            result.push({
+              kind: "entry",
+              key: node.key,
+              entry: node.entry,
+              depth: node.depth,
+              showPath: false,
+            });
+          }
+        }
+      } else {
+        for (const entry of scm.fileEntries) {
+          result.push({
+            kind: "entry",
+            key: entry.key,
+            entry,
+            depth: 0,
+            showPath: true,
+          });
+        }
       }
     }
     return result;
-  }, [changedCount, isDiverged, scm.fileEntries]);
+  }, [changedCount, isDiverged, scm.fileEntries, treeView, collapsedFolders]);
 
   const rowKeyToIndex = useMemo(() => {
     const map = new Map<string, number>();
@@ -541,6 +613,7 @@ export const SourceControlPanel = memo(function SourceControlPanel({
           return ROW_HEIGHTS.banner;
         case "list-header":
           return ROW_HEIGHTS.header;
+        case "tree-folder":
         case "entry":
           return ROW_HEIGHTS.entry;
       }
@@ -984,8 +1057,11 @@ export const SourceControlPanel = memo(function SourceControlPanel({
                             actionBusy={scm.actionBusy}
                             headerCheckState={scm.headerCheckState}
                             repoRoot={scm.repo?.repoRoot ?? null}
+                            treeView={treeView}
                             onFocusRow={setFocusedRowKey}
                             onToggleAll={scm.toggleAll}
+                            onToggleView={toggleView}
+                            onToggleFolder={toggleFolder}
                             onSelectFile={scm.selectFile}
                             onToggleStageFile={scm.toggleStageFile}
                             onDiscardFile={scm.requestDiscardFile}
@@ -1082,8 +1158,11 @@ type RowRendererProps = {
   actionBusy: string | null;
   headerCheckState: CheckState;
   repoRoot: string | null;
+  treeView: boolean;
   onFocusRow: (key: string | null) => void;
   onToggleAll: () => Promise<void> | void;
+  onToggleView: () => void;
+  onToggleFolder: (path: string) => void;
   onSelectFile: (entry: SourceControlFileEntry) => Promise<void>;
   onToggleStageFile: (entry: SourceControlFileEntry) => Promise<void>;
   onDiscardFile: (entry: SourceControlFileEntry) => void;
@@ -1097,6 +1176,8 @@ const RowRenderer = memo(function RowRenderer(props: RowRendererProps) {
       return <DivergedBanner />;
     case "list-header":
       return <ListHeader {...props} row={row} />;
+    case "tree-folder":
+      return <TreeFolderRow {...props} row={row} />;
     case "entry":
       return <EntryRow {...props} row={row} />;
   }
@@ -1125,7 +1206,9 @@ function ListHeader({
   row,
   actionBusy,
   headerCheckState,
+  treeView,
   onToggleAll,
+  onToggleView,
 }: RowRendererProps & {
   row: Extract<RowDescriptor, { kind: "list-header" }>;
 }) {
@@ -1137,16 +1220,62 @@ function ListHeader({
       <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full border border-border/60 px-1 text-[9.5px] font-semibold tabular-nums text-muted-foreground">
         {row.count}
       </span>
-      <label className="ml-auto flex shrink-0 cursor-pointer select-none items-center gap-1.5 text-[10.5px] font-medium text-muted-foreground hover:text-foreground">
-        <span>All</span>
-        <Checkbox
-          aria-label="Stage all changes"
-          checked={checkboxValue(headerCheckState)}
-          disabled={actionBusy !== null}
-          onCheckedChange={() => void onToggleAll()}
-          className="size-3.5"
-        />
-      </label>
+      <div className="ml-auto flex shrink-0 items-center gap-1">
+        <IconActionButton
+          label={treeView ? "View as list" : "View as tree"}
+          side="bottom"
+          onClick={onToggleView}
+        >
+          <HugeiconsIcon
+            icon={treeView ? LeftToRightListBulletIcon : FolderTreeIcon}
+            size={13}
+            strokeWidth={1.9}
+          />
+        </IconActionButton>
+        <label className="flex cursor-pointer select-none items-center gap-1.5 text-[10.5px] font-medium text-muted-foreground hover:text-foreground">
+          <span>All</span>
+          <Checkbox
+            aria-label="Stage all changes"
+            checked={checkboxValue(headerCheckState)}
+            disabled={actionBusy !== null}
+            onCheckedChange={() => void onToggleAll()}
+            className="size-3.5"
+          />
+        </label>
+      </div>
+    </div>
+  );
+}
+
+function TreeFolderRow({
+  row,
+  onToggleFolder,
+}: RowRendererProps & {
+  row: Extract<RowDescriptor, { kind: "tree-folder" }>;
+}) {
+  return (
+    <div
+      role="button"
+      aria-expanded={!row.collapsed}
+      onClick={() => onToggleFolder(row.path)}
+      style={{ paddingLeft: ROW_BASE_PADDING + row.depth * TREE_INDENT_STEP }}
+      className="group flex h-[30px] cursor-pointer items-center gap-1.5 rounded-md pr-2 text-muted-foreground transition-colors hover:bg-accent/30 hover:text-foreground"
+    >
+      <HugeiconsIcon
+        icon={row.collapsed ? ArrowRight01Icon : ArrowDown01Icon}
+        size={13}
+        strokeWidth={2}
+        className="shrink-0 opacity-70"
+      />
+      <HugeiconsIcon
+        icon={Folder01Icon}
+        size={14}
+        strokeWidth={1.8}
+        className="shrink-0 text-sky-400/80"
+      />
+      <span className="min-w-0 flex-1 truncate text-[12px] font-medium leading-tight">
+        {row.label}
+      </span>
     </div>
   );
 }
@@ -1169,7 +1298,7 @@ const EntryRow = memo(function EntryRow({
   const isSelected = selectedPath === entry.path;
   const fileName = basename(entry.path);
   const iconUrl = fileIconUrl(fileName);
-  const pathLabel = entryPathLabel(entry);
+  const pathLabel = row.showPath ? entryPathLabel(entry) : "";
   const showDiscard = entry.unstaged;
   const isStageBusy =
     actionBusy === `stage:${entry.path}` ||
@@ -1197,8 +1326,11 @@ const EntryRow = memo(function EntryRow({
             onFocusRow(row.key);
             void onSelectFile(entry);
           }}
+          style={{
+            paddingLeft: ROW_BASE_PADDING + row.depth * TREE_INDENT_STEP,
+          }}
           className={cn(
-            "group relative flex h-[30px] cursor-pointer items-center gap-2 rounded-md pl-2 pr-2 transition-all duration-100",
+            "group relative flex h-[30px] cursor-pointer items-center gap-2 rounded-md pr-2 transition-all duration-100",
             focused
               ? "bg-accent/60"
               : isSelected
