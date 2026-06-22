@@ -100,6 +100,23 @@ function parentOf(path: string, fallback: string): string {
   return i > 0 ? path.slice(0, i) : fallback;
 }
 
+// Every directory between `rootPath` (exclusive) and `filePath`'s own folder
+// (inclusive). These are the folders that must be expanded for the file's row
+// to exist in the tree — used by the reveal-active-file effect.
+function ancestorDirs(rootPath: string, filePath: string): string[] {
+  const prefix = `${rootPath}/`;
+  if (!filePath.startsWith(prefix)) return [];
+  const segments = filePath.slice(prefix.length).split("/");
+  segments.pop(); // drop the file's own name
+  const dirs: string[] = [];
+  let cur = rootPath;
+  for (const seg of segments) {
+    cur = `${cur}/${seg}`;
+    dirs.push(cur);
+  }
+  return dirs;
+}
+
 function buildRows(
   rootPath: string,
   tree: ReturnType<typeof useFileTree>,
@@ -196,6 +213,7 @@ export const FileExplorer = memo(
   ) {
     const tree = useFileTree(rootPath, { onPathRenamed, onPathDeleted });
     const gitDecorations = usePreferencesStore((s) => s.explorerGitDecorations);
+    const autoReveal = usePreferencesStore((s) => s.explorerAutoReveal);
     const { lookup: lookupGitStatus } = useGitStatus(
       rootPath,
       gitDecorations ? gitStatus : null,
@@ -303,6 +321,17 @@ export const FileExplorer = memo(
       },
       [entryIndexByPath, virtualizer],
     );
+
+    // Reveal the active file: expand every folder on the path down to it so its
+    // row materialises, then the sync effect below highlights and scrolls to it.
+    // expand() is idempotent and fetches children async, so already-open folders
+    // are skipped and the row appears once the deepest folder's listing loads.
+    useEffect(() => {
+      if (!autoReveal || !rootPath || !activeFilePath) return;
+      for (const dir of ancestorDirs(rootPath, activeFilePath)) {
+        tree.expand(dir);
+      }
+    }, [autoReveal, rootPath, activeFilePath, tree.expand]);
 
     const lastSyncedActivePathRef = useRef<string | null>(null);
     useEffect(() => {

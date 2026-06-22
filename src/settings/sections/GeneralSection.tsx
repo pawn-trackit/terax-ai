@@ -26,6 +26,7 @@ import {
   setEditorAutoSave,
   setEditorAutoSaveDelay,
   setEditorWordWrap,
+  setExplorerAutoReveal,
   setExplorerGitDecorations,
   setRestoreWindowState,
   setShowHidden,
@@ -99,6 +100,7 @@ export function GeneralSection() {
   const explorerGitDecorations = usePreferencesStore(
     (s) => s.explorerGitDecorations,
   );
+  const explorerAutoReveal = usePreferencesStore((s) => s.explorerAutoReveal);
   const terminalWebglEnabled = usePreferencesStore(
     (s) => s.terminalWebglEnabled,
   );
@@ -275,6 +277,15 @@ export function GeneralSection() {
           <Switch
             checked={explorerGitDecorations}
             onCheckedChange={(v) => void setExplorerGitDecorations(v)}
+          />
+        </SettingRow>
+        <SettingRow
+          title="Reveal active file"
+          description="Expand the folders leading to the file open in the editor and highlight it in the explorer."
+        >
+          <Switch
+            checked={explorerAutoReveal}
+            onCheckedChange={(v) => void setExplorerAutoReveal(v)}
           />
         </SettingRow>
       </div>
