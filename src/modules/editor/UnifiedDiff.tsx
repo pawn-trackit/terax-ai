@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef } from "react";
 
 import {
   brightenDiffSyntax,
+  diffConfig,
   DIFF_GREEN_LINE,
   DIFF_GREEN_MARK,
   DIFF_GREEN_TEXT,
@@ -108,6 +109,7 @@ export function UnifiedDiff({
         collapseUnchanged: collapseUnchanged
           ? { margin: 3, minSize: 6 }
           : undefined,
+        diffConfig,
       }),
       UNIFIED_DIFF_THEME,
       EditorView.theme({

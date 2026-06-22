@@ -6,7 +6,7 @@ import { EditorView } from "@codemirror/view";
 import { useEffect, useRef, useState } from "react";
 
 import { DiffOverviewRuler } from "./DiffOverviewRuler";
-import { brightenDiffSyntax } from "./lib/diffThemes";
+import { brightenDiffSyntax, diffConfig } from "./lib/diffThemes";
 import { buildSharedExtensions, languageCompartment } from "./lib/extensions";
 import { resolveLanguage, resolveLanguageSync } from "./lib/languageResolver";
 
@@ -108,6 +108,7 @@ export function SideBySideDiff({
         : undefined,
       gutter: true,
       highlightChanges: true,
+      diffConfig,
     });
     mergeRef.current = merge;
     setMergeView(merge);

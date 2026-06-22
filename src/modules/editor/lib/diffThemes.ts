@@ -3,6 +3,34 @@ import { Prec } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
 
+// Largest file we render with the interactive diff (MergeView / unifiedMergeView).
+// GitDiffPane switches anything bigger to a plain patch view, so this is also the
+// upper bound on the content CodeMirror's diff ever sees here. Keep GitDiffPane's
+// threshold tied to this constant — the fix below depends on the two matching.
+export const DIFF_INTERACTIVE_MAX_BYTES = 256 * 1024;
+
+// CodeMirror's diff abandons precise matching and collapses the WHOLE file into a
+// single change once a side exceeds (internal scanLimit)*64 characters — every
+// line then renders as changed (solid green/red). Its default scanLimit (500,
+// halved to 250 internally) trips this at ~16 KiB, deep inside the range we show
+// interactively, leaving a dead zone between ~16 KiB and the 256 KiB patch-view
+// fallback. We size scanLimit to that same 256 KiB ceiling so the precise-diff
+// window always spans the entire range the interactive view can receive; the
+// collapse can no longer occur here regardless of file size. A raised scanLimit
+// alone would just relocate the cliff — anchoring it to DIFF_INTERACTIVE_MAX_BYTES
+// is what stops the bug recurring for larger files.
+//
+// The precise window is (scanLimit >> 1) * 16 = scanLimit * 8 characters, so
+// scanLimit = DIFF_INTERACTIVE_MAX_BYTES / 8 makes it exactly the ceiling.
+// `timeout` is a graceful backstop: a pathological large-edit-distance diff
+// degrades to a segmented (per-region) crude diff instead of hanging, and never
+// to the all-lines-changed collapse (that needs a side > scanLimit*64 ≈ 2 MiB,
+// unreachable below the 256 KiB fallback).
+export const diffConfig = {
+  scanLimit: DIFF_INTERACTIVE_MAX_BYTES / 8,
+  timeout: 5000,
+};
+
 // Make the diff read exactly like the terminal. Two real differences caused the
 // long-standing "diff is fainter than the terminal" gap:
 //   1. PALETTE. The terminal's ANSI colors (globals.css --terminal-ansi-*) are

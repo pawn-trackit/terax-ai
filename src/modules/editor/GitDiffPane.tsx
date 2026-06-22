@@ -10,7 +10,7 @@ import {
   workingDiffKey,
   commitDiffKey,
 } from "./lib/diffCache";
-import { sideBySideDiffTheme } from "./lib/diffThemes";
+import { DIFF_INTERACTIVE_MAX_BYTES, sideBySideDiffTheme } from "./lib/diffThemes";
 import { useEditorThemeExt } from "./lib/useEditorThemeExt";
 import { SideBySideDiff } from "./SideBySideDiff";
 import { UnifiedDiff } from "./UnifiedDiff";
@@ -37,7 +37,9 @@ type Props = {
   active: boolean;
 };
 
-const LARGE_FILE_THRESHOLD = 256 * 1024;
+// Tied to the interactive diff's precise-diff window (see diffThemes.ts) so the
+// two boundaries can't drift apart and reopen the "every line highlighted" gap.
+const LARGE_FILE_THRESHOLD = DIFF_INTERACTIVE_MAX_BYTES;
 
 function countDiffLines(patch: string): { added: number; removed: number } {
   let added = 0;
