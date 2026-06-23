@@ -790,12 +790,11 @@ export function useSourceControlPanel(
       if (!repo) return;
       const mode: DiffMode = entry.unstaged ? "-" : "+";
       const nextSelection: DiffSelection = { path: entry.path, mode };
-      if (sameSelection(selected, nextSelection)) {
-        setActionError(null);
-        setActionMessage(null);
-        setSelectionTransition("none");
-        return;
-      }
+      // Always (re)open — openGitDiffTab is idempotent (focuses an existing diff
+      // tab or opens a new one). Bailing early when this file was already the
+      // selected one left a *closed* tab unopenable: the panel's `selected`
+      // isn't reset when the tab closes, so re-clicking the same file did
+      // nothing until another file was clicked first.
       setSelected(nextSelection);
       setActionError(null);
       setActionMessage(null);
@@ -803,7 +802,7 @@ export function useSourceControlPanel(
       const file = status?.changedFiles.find((c) => c.path === entry.path);
       openSelection(nextSelection, repo.repoRoot, file);
     },
-    [openSelection, repo, selected, status],
+    [openSelection, repo, status],
   );
 
   const toggleStageFile = useCallback(
