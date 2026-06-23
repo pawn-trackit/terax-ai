@@ -544,6 +544,14 @@ export function useSourceControlPanel(
 
   const openSelection = useCallback(
     (sel: DiffSelection, repoRoot: string, file: GitChangedFile | undefined) => {
+      // Working diffs are cached by (repoRoot, path, mode) with no content
+      // version, and nothing invalidates them when the file is edited again
+      // (no FS watcher; status only refreshes on focus/manual/git-actions). So
+      // a file changed after its first diff view re-opens stale. Drop this
+      // file's cached working diff on open so the (re)mounted GitDiffPane
+      // refetches the current diff — GitDiffStack mounts only the active diff
+      // tab, so reopening from here always reads the cache fresh.
+      invalidateDiff(workingDiffKey(repoRoot, sel.path, sel.mode));
       onOpenDiff?.({
         path: sel.path,
         repoRoot,
