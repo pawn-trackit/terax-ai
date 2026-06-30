@@ -98,7 +98,7 @@ export function UnifiedDiff({
   const extensions = useMemo(
     () => [
       ...SHARED_EXT,
-      languageCompartment.of(initialLang ?? []),
+      languageCompartment.of(initialLang?.ext ?? []),
       ...READONLY_EXT,
       unifiedMergeView({
         original: originalContent,
@@ -134,11 +134,13 @@ export function UnifiedDiff({
   useEffect(() => {
     if (initialLang) return;
     let cancelled = false;
-    resolveLanguage(path).then((ext) => {
+    resolveLanguage(path).then((res) => {
       if (cancelled) return;
       const view = cmRef.current?.view;
       if (!view) return;
-      view.dispatch({ effects: languageCompartment.reconfigure(ext ?? []) });
+      view.dispatch({
+        effects: languageCompartment.reconfigure(res?.ext ?? []),
+      });
     });
     return () => {
       cancelled = true;

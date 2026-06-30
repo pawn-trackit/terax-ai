@@ -90,7 +90,7 @@ export function SideBySideDiff({
     });
     const sideExtensions = (forB: boolean): Extension[] => [
       ...SHARED_EXT,
-      languageCompartment.of(initialLang ?? []),
+      languageCompartment.of(initialLang?.ext ?? []),
       ...READONLY_EXT,
       themeExt,
       diffTheme,
@@ -137,12 +137,16 @@ export function SideBySideDiff({
     // reconfigure both sides (the shared compartment maps independently per view).
     let cancelled = false;
     if (!initialLang) {
-      resolveLanguage(path).then((ext) => {
+      resolveLanguage(path).then((res) => {
         if (cancelled) return;
         const m = mergeRef.current;
         if (!m) return;
-        m.a.dispatch({ effects: languageCompartment.reconfigure(ext ?? []) });
-        m.b.dispatch({ effects: languageCompartment.reconfigure(ext ?? []) });
+        m.a.dispatch({
+          effects: languageCompartment.reconfigure(res?.ext ?? []),
+        });
+        m.b.dispatch({
+          effects: languageCompartment.reconfigure(res?.ext ?? []),
+        });
       });
     }
 
