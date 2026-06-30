@@ -231,6 +231,22 @@ function attachScrollAmplifier(term: Terminal, host: HTMLElement): void {
   );
 }
 
+// [herdr] When a TUI turns on mouse reporting (herdr, lazygit, vim with mouse,
+// …) xterm forwards the right-click to the app, which draws its OWN menu — but
+// WKWebView still pops its native context menu on the same click, stacking two
+// menus. Suppress the native one exactly while an app is capturing the mouse
+// (mouseTrackingMode != 'none'); a plain shell prompt reports 'none' and keeps
+// the native menu. The mode is read live per event, so it follows the app: it
+// turns off the instant the TUI exits. No modifier exception — on macOS xterm's
+// force-selection bypass is alt+macOptionClickForcesSelection (the option is
+// off here), so the right-click always reaches the app regardless of modifiers;
+// letting the native menu through on any key would just restore the double menu.
+function attachContextMenuGuard(term: Terminal, host: HTMLElement): void {
+  host.addEventListener("contextmenu", (e) => {
+    if (term.modes.mouseTrackingMode !== "none") e.preventDefault();
+  });
+}
+
 function createSlot(): Slot {
   const term = new Terminal(termOptions());
   const fitAddon = new FitAddon();
@@ -249,6 +265,7 @@ function createSlot(): Slot {
   getRecycler().appendChild(host);
   term.open(host);
   attachScrollAmplifier(term, host);
+  attachContextMenuGuard(term, host);
 
   const slot: Slot = {
     id: slots.length,
