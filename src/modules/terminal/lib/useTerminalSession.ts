@@ -422,6 +422,9 @@ configureRendererPool({
     if (out.rows > 0) s.rows = out.rows;
     s.altScreenAtRelease = out.altScreen;
   },
+  leafCwd(leafId) {
+    return leafCwd(leafId);
+  },
 });
 
 function ensureSession(

@@ -1,13 +1,15 @@
 import { resolveFontFamily } from "@/lib/fonts";
 import { usePreferencesStore } from "@/modules/settings/preferences";
+import { currentWorkspaceEnv } from "@/modules/workspace/env";
 import { buildTerminalTheme } from "@/styles/terminalTheme";
+import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { type FontWeight, Terminal } from "@xterm/xterm";
+import { type FontWeight, type ILink, type ILinkProvider, Terminal } from "@xterm/xterm";
 import { shouldCursorBlink } from "./cursorBlink";
 import {
   readTerminalClipboard,
@@ -20,8 +22,11 @@ import {
 } from "./keymap";
 
 export const POOL_MAX_SIZE = 5;
-const FIT_DEBOUNCE_MS = 8;
-const PTY_RESIZE_DEBOUNCE_MS = 256;
+// Delay after a resize settles before the PTY (and thus an alt-screen TUI like
+// herdr) is resized + repainted. Lower = the TUI redraws sooner after resizing
+// or closing the side panel; kept above a frame or two so a continuous drag
+// still coalesces into one resize instead of thrashing the PTY.
+const PTY_RESIZE_DEBOUNCE_MS = 100;
 const SNAPSHOT_SCROLLBACK_CAP = 5_000;
 
 export type SlotAdapter = {
@@ -32,6 +37,8 @@ export type SlotAdapter = {
   isLeafBusy(leafId: number): boolean;
   isLeafVisible(leafId: number): boolean;
   storeSnapshot(leafId: number, out: SerializeOutput): void;
+  // Current working directory of a leaf, for resolving clicked relative paths.
+  leafCwd(leafId: number): string | null;
 };
 
 export type LeafBridge = {
@@ -65,6 +72,7 @@ export type Slot = {
   webglReapTimer: ReturnType<typeof setTimeout> | null;
   slotReapTimer: ReturnType<typeof setTimeout> | null;
   unhideRaf: number | null;
+  settleRaf: number | null;
   lastCols: number;
   lastRows: number;
   lastW: number;
@@ -247,6 +255,168 @@ function attachContextMenuGuard(term: Terminal, host: HTMLElement): void {
   });
 }
 
+// [herdr] Click-to-open-file. herdr runs inside a terminal pane and holds the
+// mouse, but it only opens http/https URLs, and Claude Code prints file paths as
+// plain (color-only) text — never OSC 8 links. So terax linkifies file-path
+// tokens itself via an xterm link provider and opens them in its own editor on
+// Cmd+click. xterm's link activation and the PTY mouse-forwarding are separate
+// listeners, so this works while herdr keeps mouse capture on; a plain click is
+// left untouched and still reaches herdr (its panel/tab UI). Cmd matches macOS
+// convention; on a file path herdr's own Cmd chord no-ops (path isn't a URL).
+// The opener and herdr worktree root are injected from React (App), since this
+// module lives outside the component tree.
+let terminalFileOpener: ((path: string, line: number) => void) | null = null;
+let herdrWorktreeRoot: string | null = null;
+
+export function setTerminalFileOpener(
+  fn: ((path: string, line: number) => void) | null,
+): void {
+  terminalFileOpener = fn;
+}
+
+export function setHerdrWorktreeRoot(root: string | null): void {
+  herdrWorktreeRoot = root;
+}
+
+// A path-like token: optional ./ ~/ or / prefix, path segments, then a filename
+// with a LETTER-initial extension (so version strings like v0.6.10 don't match),
+// and an optional :line or :line:col suffix.
+const FILE_PATH_RE =
+  /(?:[~.]{0,2}\/)?(?:[\w.-]+\/)*[\w.-]+\.[A-Za-z][\w-]*(?::\d+(?::\d+)?)?/g;
+
+function splitLineSuffix(token: string): { path: string; line: number } {
+  const m = token.match(/^(.+):(\d+)(?::\d+)?$/);
+  if (m) return { path: m[1], line: Number.parseInt(m[2], 10) };
+  return { path: token, line: 1 };
+}
+
+// Base dirs for resolving a clicked relative path: the pane's own cwd, and (for
+// a herdr pane, whose OSC 7 cwd is suppressed) the herdr worktree root.
+function baseDirs(leafId: number): string[] {
+  const out: string[] = [];
+  for (const b of [adapter?.leafCwd(leafId) ?? null, herdrWorktreeRoot]) {
+    if (b && !out.includes(b)) out.push(b);
+  }
+  return out;
+}
+
+async function fileIsRegular(path: string): Promise<boolean> {
+  try {
+    const st = await invoke<{ kind: string }>("fs_stat", {
+      path,
+      workspace: currentWorkspaceEnv(),
+    });
+    return !!st && st.kind !== "dir";
+  } catch {
+    return false;
+  }
+}
+
+// Anchor a clicked path as a recursive glob so it can be found by suffix wherever
+// it lives; a "..." abbreviation segment (Claude elides mid-path in prose)
+// becomes a **/ wildcard. e.g. "tests/.../a.py" -> "**/tests/**/a.py".
+function suffixGlob(rawPath: string): string {
+  const segs = rawPath
+    .replace(/^\.\//, "")
+    .split("/")
+    .filter((s) => s.length > 0)
+    .map((s) => (s === "..." ? "**" : s));
+  return `**/${segs.join("/")}`;
+}
+
+async function globForSuffix(
+  rawPath: string,
+  roots: string[],
+): Promise<string | null> {
+  const pattern = suffixGlob(rawPath);
+  for (const root of roots) {
+    try {
+      const res = await invoke<{ hits: { path: string; rel: string }[] }>(
+        "fs_glob",
+        { pattern, root, maxResults: 20, workspace: currentWorkspaceEnv() },
+      );
+      const hits = res?.hits ?? [];
+      if (hits.length === 0) continue;
+      // Best guess when multiple match: the shallowest (fewest path segments).
+      hits.sort((a, b) => a.rel.split("/").length - b.rel.split("/").length);
+      return hits[0].path;
+    } catch {
+      // try the next root
+    }
+  }
+  return null;
+}
+
+// Resolve a clicked path token to an existing file, or null. Direct join first
+// (fast, exact); the existence gate also keeps prose like "e.g." from opening
+// bogus tabs. On a miss, fall back to a repo-wide suffix search — Claude often
+// writes paths relative to a sub-package or elides mid-path with "...".
+async function resolveClickedFile(
+  rawPath: string,
+  leafId: number,
+): Promise<string | null> {
+  if (rawPath.startsWith("/")) {
+    return (await fileIsRegular(rawPath)) ? rawPath : null;
+  }
+  const roots = baseDirs(leafId);
+  const rel = rawPath.replace(/^\.\//, "");
+  for (const root of roots) {
+    const abs = `${root.replace(/\/+$/, "")}/${rel}`;
+    if (await fileIsRegular(abs)) return abs;
+  }
+  return globForSuffix(rawPath, roots);
+}
+
+function openFilePathToken(
+  event: MouseEvent,
+  token: string,
+  leafId: number,
+): void {
+  // Only the Cmd chord opens files; plain and other clicks fall through to herdr.
+  if (!event.metaKey) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const { path, line } = splitLineSuffix(token);
+  void resolveClickedFile(path, leafId).then((abs) => {
+    if (abs) terminalFileOpener?.(abs, line);
+  });
+}
+
+function registerFilePathLinks(term: Terminal, slot: Slot): void {
+  const provider: ILinkProvider = {
+    // provideLinks' bufferLineNumber is 1-based; getLine is 0-based; ranges are
+    // 1-based (x from 1, y == bufferLineNumber).
+    provideLinks(y, callback) {
+      const leafId = slot.currentLeafId;
+      if (leafId === null) return callback(undefined);
+      const bufferLine = term.buffer.active.getLine(y - 1);
+      if (!bufferLine) return callback(undefined);
+      const text = bufferLine.translateToString(true);
+      const links: ILink[] = [];
+      FILE_PATH_RE.lastIndex = 0;
+      let m: RegExpExecArray | null = FILE_PATH_RE.exec(text);
+      while (m !== null) {
+        const token = m[0];
+        const startX = m.index + 1;
+        links.push({
+          text: token,
+          range: {
+            start: { x: startX, y },
+            end: { x: m.index + token.length, y },
+          },
+          // No persistent decoration: paths render unchanged and only the Cmd
+          // chord acts, so terminal output isn't visually cluttered.
+          decorations: { pointerCursor: false, underline: false },
+          activate: (event) => openFilePathToken(event, token, leafId),
+        });
+        m = FILE_PATH_RE.exec(text);
+      }
+      callback(links.length > 0 ? links : undefined);
+    },
+  };
+  term.registerLinkProvider(provider);
+}
+
 function createSlot(): Slot {
   const term = new Terminal(termOptions());
   const fitAddon = new FitAddon();
@@ -286,6 +456,7 @@ function createSlot(): Slot {
     webglReapTimer: null,
     slotReapTimer: null,
     unhideRaf: null,
+    settleRaf: null,
     lastCols: term.cols,
     lastRows: term.rows,
     lastW: 0,
@@ -358,6 +529,8 @@ function createSlot(): Slot {
     if (leafId === null) return;
     adapter?.resolveLeaf(leafId)?.writeToPty(data);
   });
+
+  registerFilePathLinks(term, slot);
 
   slots.push(slot);
   return slot;
@@ -610,6 +783,48 @@ function cancelPendingUnhide(slot: Slot): void {
   }
 }
 
+function cancelSettleFit(slot: Slot): void {
+  if (slot.settleRaf !== null) {
+    cancelAnimationFrame(slot.settleRaf);
+    slot.settleRaf = null;
+  }
+}
+
+// [herdr] Deferred catch-up fit for a slot that just became visible again on a
+// tab return. The immediate alternative read the container mid-relayout: when a
+// tab that owns a right-side file column is re-activated, the workspace panel is
+// briefly full-width for a frame before the side column remounts and claims its
+// share. Fitting that transient width resized the PTY twice (wide, then narrow),
+// so an alt-screen TUI (herdr) redrew its whole layout wide then snapped narrow
+// — the tab-return "text jumps big then shrinks" jitter. Waiting two frames lets
+// the layout settle, so we fit ONCE to the final width; when that equals the
+// pre-park width (the common case) it's a no-op and the PTY is never touched.
+function scheduleSettleFit(slot: Slot, leafId: number): void {
+  cancelSettleFit(slot);
+  slot.settleRaf = requestAnimationFrame(() => {
+    slot.settleRaf = requestAnimationFrame(() => {
+      slot.settleRaf = null;
+      if (slot.parked || slot.currentLeafId !== leafId) return;
+      const container = slot.host.parentElement;
+      if (!container) return;
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      if (w === slot.lastW && h === slot.lastH) return;
+      slot.lastW = w;
+      slot.lastH = h;
+      slot.fitAddon.fit();
+      if (slot.term.cols !== slot.lastCols || slot.term.rows !== slot.lastRows) {
+        slot.lastCols = slot.term.cols;
+        slot.lastRows = slot.term.rows;
+        adapter?.resolveLeaf(leafId)?.resizePty(slot.lastCols, slot.lastRows);
+      }
+      try {
+        slot.term.refresh(0, slot.term.rows - 1);
+      } catch {}
+    });
+  });
+}
+
 function rewireSlot(slot: Slot, p: AcquireParams): void {
   slot.lastUsedAt = performance.now();
   unparkSlotHost(slot);
@@ -647,20 +862,21 @@ function setupResizeObserver(slot: Slot, p: AcquireParams): void {
   };
 
   slot.observer = new ResizeObserver(() => {
-    if (slot.parked) return;
-    if (slot.fitTimer) clearTimeout(slot.fitTimer);
-    slot.fitTimer = setTimeout(() => {
-      slot.fitTimer = null;
-      if (slot.currentLeafId !== p.leafId || slot.parked) return;
-      const w = container.clientWidth;
-      const h = container.clientHeight;
-      if (w === slot.lastW && h === slot.lastH) return;
-      slot.lastW = w;
-      slot.lastH = h;
-      slot.fitAddon.fit();
-      if (slot.ptyTimer) clearTimeout(slot.ptyTimer);
-      slot.ptyTimer = setTimeout(flushPty, PTY_RESIZE_DEBOUNCE_MS);
-    }, FIT_DEBOUNCE_MS);
+    if (slot.parked || slot.currentLeafId !== p.leafId) return;
+    const w = container.clientWidth;
+    const h = container.clientHeight;
+    if (w === slot.lastW && h === slot.lastH) return;
+    slot.lastW = w;
+    slot.lastH = h;
+    // Fit SYNCHRONOUSLY inside the ResizeObserver (which runs before the browser
+    // paints) so xterm resizes its canvas to the new grid in the same frame.
+    // Deferring it (setTimeout) let the old canvas paint stretched to the new
+    // container size for a frame — which read as the terminal text ballooning
+    // then snapping back when the side panel shows/hides on a tab switch. The
+    // PTY resize (and thus the herdr repaint) stays debounced below.
+    slot.fitAddon.fit();
+    if (slot.ptyTimer) clearTimeout(slot.ptyTimer);
+    slot.ptyTimer = setTimeout(flushPty, PTY_RESIZE_DEBOUNCE_MS);
   });
   slot.observer.observe(container);
 }
@@ -720,6 +936,7 @@ function detachSlotFromLeaf(slot: Slot, retain: boolean): void {
   slot.ptyTimer = null;
 
   cancelPendingUnhide(slot);
+  cancelSettleFit(slot);
   slot.host.style.visibility = "";
 
   slot.currentLeafId = null;
@@ -790,6 +1007,7 @@ function disposeSlot(slot: Slot): void {
   cancelSlotReap(slot);
   cancelWebglReap(slot);
   cancelPendingUnhide(slot);
+  cancelSettleFit(slot);
   if (slot.fitTimer) clearTimeout(slot.fitTimer);
   if (slot.ptyTimer) clearTimeout(slot.ptyTimer);
   slot.fitTimer = null;
@@ -1048,25 +1266,13 @@ export function refreshLeafSlot(leafId: number): void {
   if (usePreferencesStore.getState().terminalWebglEnabled && !slot.webglAddon) {
     attachWebgl(slot);
   }
-  // The observer skips parked slots; catch up on container resizes here.
-  const container = slot.host.parentElement;
-  if (
-    container &&
-    (container.clientWidth !== slot.lastW ||
-      container.clientHeight !== slot.lastH)
-  ) {
-    slot.lastW = container.clientWidth;
-    slot.lastH = container.clientHeight;
-    slot.fitAddon.fit();
-    if (slot.term.cols !== slot.lastCols || slot.term.rows !== slot.lastRows) {
-      slot.lastCols = slot.term.cols;
-      slot.lastRows = slot.term.rows;
-      adapter?.resolveLeaf(leafId)?.resizePty(slot.lastCols, slot.lastRows);
-    }
-  }
+  // Repaint the current buffer now (correct at the current grid); the observer
+  // skips parked slots, so catch up on any container resize — but do it deferred
+  // (scheduleSettleFit) rather than against the possibly-transient current width.
   try {
     slot.term.refresh(0, slot.term.rows - 1);
   } catch {}
+  scheduleSettleFit(slot, leafId);
 }
 
 export function disposeLeafSlot(leafId: number): void {

@@ -9,7 +9,7 @@ import {
   SearchQuery,
   setSearchQuery,
 } from "@codemirror/search";
-import { Prec } from "@codemirror/state";
+import { EditorState, Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { vim } from "@replit/codemirror-vim";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
@@ -59,6 +59,8 @@ type Props = {
   onDirtyChange?: (dirty: boolean) => void;
   onSaved?: () => void;
   onClose?: () => void;
+  /** Open the document non-editable (view-only). Defaults to editable. */
+  readOnly?: boolean;
 };
 
 function formatBytes(n: number): string {
@@ -69,7 +71,8 @@ function formatBytes(n: number): string {
 
 export const EditorPane = forwardRef<EditorPaneHandle, Props>(
   function EditorPane(props, ref) {
-    const { path, overrideLanguage, onDirtyChange, onSaved, onClose } = props;
+    const { path, overrideLanguage, onDirtyChange, onSaved, onClose, readOnly } =
+      props;
 
     const { doc, onChange, save, reload } = useDocument({
       path,
@@ -179,6 +182,11 @@ export const EditorPane = forwardRef<EditorPaneHandle, Props>(
           close: () => onCloseRef.current?.(),
         })),
         ...buildSharedExtensions(),
+        // readOnly (not editable:false) keeps the view FOCUSABLE and selectable
+        // — it just rejects edits. Focusability matters: the side panel's Cmd+W
+        // routing locates the focused column via document.activeElement, and text
+        // stays selectable for copy.
+        readOnly ? EditorState.readOnly.of(true) : [],
         languageCompartment.of([]),
         inlineCompletion({
           getPrefs: () => {

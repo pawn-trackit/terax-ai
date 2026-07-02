@@ -10,6 +10,10 @@ export {
   whenSessionReady,
   writeToSession,
 } from "./lib/useTerminalSession";
+export {
+  setHerdrWorktreeRoot,
+  setTerminalFileOpener,
+} from "./lib/rendererPool";
 export { useTerminalFileDrop } from "./lib/useTerminalFileDrop";
 export {
   findLeafCwd,

@@ -41,7 +41,6 @@ import { useExplorerFileDrop } from "./lib/useExplorerFileDrop";
 import { useFileTree } from "./lib/useFileTree";
 import { useGitStatus } from "./lib/useGitStatus";
 import type { GitStatusCode } from "./lib/gitStatusUtils";
-import { useGlobalShortcuts } from "@/modules/shortcuts";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import type { GitStatusSnapshot } from "@/modules/ai/lib/native";
 
@@ -49,6 +48,7 @@ export type FileExplorerHandle = {
   focus: () => void;
   isFocused: () => boolean;
   focusSearch: () => void;
+  toggleSearch: () => void;
 };
 
 type Props = {
@@ -365,20 +365,17 @@ export const FileExplorer = memo(
           setIsSearchOpen(true);
           searchRef.current?.focus();
         },
+        toggleSearch: () => {
+          if (searchRef.current?.isFocused()) {
+            setIsSearchOpen(false);
+            return;
+          }
+          setIsSearchOpen(true);
+          searchRef.current?.focus();
+        },
       }),
       [entryPaths, scrollEntryIntoView, selectedPath],
     );
-
-    useGlobalShortcuts({
-      "explorer.search": () => {
-        if (searchRef.current?.isFocused()) {
-          setIsSearchOpen(false);
-          return;
-        }
-        setIsSearchOpen(true);
-        searchRef.current?.focus();
-      },
-    });
 
     if (!rootPath) {
       return (

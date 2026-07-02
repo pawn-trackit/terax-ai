@@ -50,6 +50,19 @@ export type EditorTab = TabBase & {
    */
   preview: boolean;
   overrideLanguage?: string | null;
+  /**
+   * True for a file opened by a terminal Cmd+click into the RIGHT-SIDE panel.
+   * A side tab is a real editor tab (so it inherits close/dirty/gotoLine/zoom)
+   * but is excluded from the top tab bar and the center surface, and rendered
+   * in its own right-side ResizablePanel column instead.
+   */
+  sidePanel?: boolean;
+  /**
+   * For a side tab: the id of the terminal tab it was opened from. The column is
+   * only shown while that owner tab is active, so side files stay tied to the
+   * tab you clicked them in (they hide when you switch tabs).
+   */
+  sideOwnerTabId?: number;
 };
 
 export type PreviewTab = TabBase & {
@@ -167,7 +180,16 @@ export function nextActiveInSpace(
 ): number | null {
   const closing = tabs.find((t) => t.id === closingId);
   if (!closing) return null;
-  const sameSpace = tabs.filter((t) => t.spaceId === closing.spaceId);
+  // "Real" tabs only — right-side-panel columns are never the active tab and
+  // don't count toward the last-tab-in-space invariant.
+  const sameSpace = tabs.filter(
+    (t) => t.spaceId === closing.spaceId && !(t.kind === "editor" && t.sidePanel),
+  );
+  // Closing a side column is always allowed (it can't empty the space of real
+  // tabs); the returned id is unused since a side tab is never the active tab.
+  if (closing.kind === "editor" && closing.sidePanel) {
+    return sameSpace[0]?.id ?? closingId;
+  }
   if (sameSpace.length <= 1) return null;
   const idx = sameSpace.findIndex((t) => t.id === closingId);
   return (sameSpace[idx - 1] ?? sameSpace[idx + 1]).id;
@@ -567,6 +589,44 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     return targetId as number | null;
   }, []);
 
+  // Open a file into the RIGHT-SIDE panel as a side-flagged editor tab. Unlike
+  // openFileTab this does NOT change the active tab (the terminal stays active)
+  // and never becomes a preview slot. Deduped per path among side tabs so a
+  // re-click reuses the existing column. Returns the tab id for line-jump.
+  const openSideFileTab = useCallback((path: string, ownerTabId: number) => {
+    let targetId: number | null = null;
+    setTabs((curr) => {
+      const existing = curr.find(
+        (t) =>
+          t.kind === "editor" &&
+          t.sidePanel &&
+          t.path === path &&
+          t.sideOwnerTabId === ownerTabId,
+      );
+      if (existing) {
+        targetId = existing.id;
+        return curr;
+      }
+      const id = nextIdRef.current++;
+      targetId = id;
+      return [
+        ...curr,
+        {
+          id,
+          kind: "editor",
+          spaceId: activeSpaceIdRef.current,
+          title: basename(path),
+          path,
+          dirty: false,
+          preview: false,
+          sidePanel: true,
+          sideOwnerTabId: ownerTabId,
+        } satisfies EditorTab,
+      ];
+    });
+    return targetId as number | null;
+  }, []);
+
   /**
    * Promotes a preview tab to a persistent one. Called on double-click of the
    * tab title in the tab bar. Dirty edits also auto-promote (see `updateTab`).
@@ -904,7 +964,12 @@ export function useTabs(initial?: Partial<TerminalTab>) {
       if (target?.kind === "terminal") {
         toDispose = leafIds(target.paneTree);
       }
-      const next = curr.filter((t) => t.id !== id);
+      // Also drop any right-side columns owned by the tab being closed.
+      const next = curr.filter(
+        (t) =>
+          t.id !== id &&
+          !(t.kind === "editor" && t.sidePanel && t.sideOwnerTabId === id),
+      );
       setActiveId((active) => (id === active ? fallback : active));
       return next;
     });
@@ -963,9 +1028,13 @@ export function useTabs(initial?: Partial<TerminalTab>) {
 
   const selectByIndex = useCallback(
     (idx: number, spaceId?: string) => {
+      // Cmd+1..9 numbering skips right-side-panel editor tabs.
+      const selectable = tabs.filter(
+        (t) => !(t.kind === "editor" && t.sidePanel),
+      );
       const t = spaceId
-        ? pickTabBySpaceIndex(tabs, idx, spaceId)
-        : tabs[idx];
+        ? pickTabBySpaceIndex(selectable, idx, spaceId)
+        : selectable[idx];
       if (t) setActiveId(t.id);
     },
     [tabs],
@@ -1157,6 +1226,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     newAgentTab,
     newPrivateTab,
     openFileTab,
+    openSideFileTab,
     pinTab,
     newPreviewTab,
     newMarkdownTab,

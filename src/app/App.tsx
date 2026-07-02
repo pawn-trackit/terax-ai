@@ -29,6 +29,7 @@ import {
 } from "@/modules/command-palette";
 import {
   NewEditorDialog,
+  SideEditorColumn,
   useEditorFileSync,
   type EditorPaneHandle,
 } from "@/modules/editor";
@@ -61,6 +62,7 @@ import {
 } from "@/modules/source-control";
 import { StatusBar } from "@/modules/statusbar";
 import {
+  type EditorTab,
   TabSwitcherHud,
   useTabs,
   useTabSwitcher,
@@ -74,6 +76,8 @@ import {
   hasLeaf,
   leafIds,
   navigateFocusedBlocks,
+  setHerdrWorktreeRoot,
+  setTerminalFileOpener,
   type TerminalPaneHandle,
   useTerminalFileDrop,
   writeToSession,
@@ -89,7 +93,15 @@ import { ThemeProvider, useThemeFileEditing } from "@/modules/theme";
 import { UpdaterDialog } from "@/modules/updater";
 import { useWorkspaceEnvStore, type WorkspaceEnv } from "@/modules/workspace";
 import type { SearchAddon } from "@xterm/addon-search";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { useGroupRef } from "react-resizable-panels";
 import { CloseDialogs } from "./components/CloseDialogs";
 import {
   TOGGLE_BLOCK_INPUT_EVENT,
@@ -119,6 +131,7 @@ export default function App() {
     newAgentTab,
     newPrivateTab,
     openFileTab,
+    openSideFileTab,
     pinTab,
     newPreviewTab,
     newMarkdownTab,
@@ -254,10 +267,90 @@ export default function App() {
 
   const [switcherOpen, setSwitcherOpen] = useState(false);
 
-  const spaceTabs = useMemo(
+  const spaceTabsAll = useMemo(
     () => tabs.filter((t) => t.spaceId === (activeSpaceId ?? DEFAULT_SPACE_ID)),
     [tabs, activeSpaceId],
   );
+  // Top bar / Ctrl+Tab switcher / Cmd+1..9 all read spaceTabs — exclude the
+  // right-side-panel editor tabs so they never appear in or shift the top bar.
+  const spaceTabs = useMemo(
+    () => spaceTabsAll.filter((t) => !(t.kind === "editor" && t.sidePanel)),
+    [spaceTabsAll],
+  );
+  // Side-flagged editor tabs owned by the ACTIVE tab → rendered as right-side
+  // columns. Tied to the tab they were opened from, so they hide on tab switch.
+  const sideTabs = useMemo(
+    () =>
+      tabs.filter(
+        (t): t is EditorTab =>
+          t.kind === "editor" && !!t.sidePanel && t.sideOwnerTabId === activeId,
+      ),
+    [tabs, activeId],
+  );
+  // Center surface: every tab except side editors (the stacks self-filter by
+  // activeId, so this spans spaces harmlessly).
+  const centerTabs = useMemo(
+    () => tabs.filter((t) => !(t.kind === "editor" && t.sidePanel)),
+    [tabs],
+  );
+
+  // When a right-side file column opens (or closes), split the content row into
+  // equal shares instead of letting the new column squeeze in at a fixed
+  // fraction (which read as "too small"). We keep the left sidebar's width and
+  // divide the remaining space evenly among the workspace and every side column.
+  const contentGroupRef = useGroupRef();
+  const sideColumnIds = useMemo(
+    () => sideTabs.map((t) => `side-file-${t.id}`),
+    [sideTabs],
+  );
+  const sideColumnKey = sideColumnIds.join(",");
+  // Re-balance whenever the set of open side columns changes; keyed on
+  // sideColumnKey, and contentGroupRef is a stable ref.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally keyed on sideColumnKey only
+  useEffect(() => {
+    if (sideColumnIds.length === 0) return;
+    // A just-mounted Panel registers with the group ONE commit after this
+    // effect's commit, so a synchronous getLayout() here would still describe
+    // the old panel set — and setLayout() validates the entry count against the
+    // live constraints and THROWS on a mismatch (which white-screened the app).
+    // So poll across a few frames and only apply once the group's own layout
+    // key set already matches exactly the panels we expect; skip otherwise.
+    const expected = new Set(["sidebar", "workspace", ...sideColumnIds]);
+    let raf = 0;
+    let tries = 0;
+    const attempt = () => {
+      raf = 0;
+      const group = contentGroupRef.current;
+      if (!group) return;
+      const layout = group.getLayout();
+      const keys = Object.keys(layout);
+      const ready =
+        keys.length === expected.size && keys.every((k) => expected.has(k));
+      if (!ready) {
+        if (tries++ < 5) raf = requestAnimationFrame(attempt);
+        return;
+      }
+      const sidebarPct = layout.sidebar ?? 0;
+      const contentIds = ["workspace", ...sideColumnIds];
+      // Equal shares. For 1–2 columns this lands cleanly; with enough columns the
+      // per-panel share can dip under workspace's 30% floor, in which case
+      // setLayout clamps + redistributes (columns stay close but not exactly
+      // equal). That only bites at 3+ simultaneous columns, which is rare here.
+      const share = (100 - sidebarPct) / contentIds.length;
+      const next: Record<string, number> = { ...layout, sidebar: sidebarPct };
+      for (const id of contentIds) next[id] = share;
+      try {
+        group.setLayout(next);
+      } catch {
+        // Constraints rejected the layout; leave the group as-is rather than
+        // tearing down the tree.
+      }
+    };
+    raf = requestAnimationFrame(attempt);
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [sideColumnKey]);
 
   const {
     sidebarRef,
@@ -270,6 +363,7 @@ export default function App() {
     cycleSidebarView,
     persistSidebarWidth,
     toggleExplorerFocus,
+    openExplorerSearch,
   } = useSidebarPanel(explorerRef);
 
   const [newEditorOpen, setNewEditorOpen] = useState(false);
@@ -406,7 +500,9 @@ export default function App() {
   const getSwitcherOrder = useCallback(() => {
     const space = activeSpaceId ?? DEFAULT_SPACE_ID;
     const inSpace = tabsRef.current
-      .filter((t) => t.spaceId === space)
+      .filter(
+        (t) => t.spaceId === space && !(t.kind === "editor" && t.sidePanel),
+      )
       .map((t) => t.id);
     const present = new Set(inSpace);
     const ordered = mruRef.current.filter((id) => present.has(id));
@@ -639,6 +735,16 @@ export default function App() {
   );
 
   const handleCloseTabOrPane = useCallback(() => {
+    // Cmd+W follows focus: if a right-side file column is focused, close THAT
+    // side tab (same tab-close path), not the global active tab.
+    const sideEl = document.activeElement?.closest("[data-side-editor-id]");
+    const sideId = sideEl
+      ? Number(sideEl.getAttribute("data-side-editor-id"))
+      : Number.NaN;
+    if (!Number.isNaN(sideId)) {
+      void handleClose(sideId);
+      return;
+    }
     const t = tabsRef.current.find((x) => x.id === activeId);
     if (t?.kind === "terminal" && leafIds(t.paneTree).length > 1) {
       closeActivePane(activeId);
@@ -705,6 +811,7 @@ export default function App() {
       "settings.open": () => void openSettingsWindow(),
       "sidebar.toggle": toggleSidebar,
       "explorer.focus": toggleExplorerFocus,
+      "explorer.search": openExplorerSearch,
       "view.zoomIn": zoomIn,
       "view.zoomOut": zoomOut,
       "view.zoomReset": zoomReset,
@@ -731,6 +838,7 @@ export default function App() {
       askFromSelection,
       toggleSidebar,
       toggleExplorerFocus,
+      openExplorerSearch,
       zoomIn,
       zoomOut,
       zoomReset,
@@ -1010,7 +1118,7 @@ export default function App() {
             splitPaneRight: () => splitActivePaneInActiveTab("row"),
             splitPaneDown: () => splitActivePaneInActiveTab("col"),
             focusSearch: () => searchInlineRef.current?.focus(),
-            focusExplorerSearch: () => explorerRef.current?.focusSearch(),
+            focusExplorerSearch: openExplorerSearch,
             toggleSidebar,
             toggleAi: togglePanelAndFocus,
             askAiSelection: askFromSelection,
@@ -1039,6 +1147,7 @@ export default function App() {
       handleCloseTabOrPane,
       splitActivePaneInActiveTab,
       toggleSidebar,
+      openExplorerSearch,
       togglePanelAndFocus,
       askFromSelection,
       activeSpaceId,
@@ -1057,6 +1166,45 @@ export default function App() {
     },
     [openFileTab],
   );
+
+  // Terminal Cmd+click opens the file as a side-flagged editor tab rendered in a
+  // right-side column (openSideFileTab does NOT change the active tab). Then jump
+  // to the clicked line via the SHARED editorRefs registry. A freshly-created
+  // column has a zero-height viewport for the first frame(s), so re-fire gotoLine
+  // over a few settled frames; before the column registers its handle, stash the
+  // line in pendingGotoLine (registerEditorHandle drains it on mount).
+  const openContentHitSide = useCallback(
+    (path: string, line: number) => {
+      const id = openSideFileTab(path, activeId);
+      if (id == null) return;
+      let settled = 0;
+      let tries = 0;
+      const jump = () => {
+        const h = editorRefs.current.get(id);
+        if (h) {
+          h.gotoLine(line);
+          settled++;
+        } else {
+          pendingGotoLine.current.set(id, line);
+        }
+        if (settled < 3 && ++tries < 40) requestAnimationFrame(jump);
+      };
+      requestAnimationFrame(jump);
+    },
+    [openSideFileTab, activeId],
+  );
+
+  // Bridge the terminal file opener and herdr worktree root into the
+  // (component-tree-external) renderer pool. Terminal Cmd+clicks route to the
+  // right-side panel (openContentHitSide), NOT to a normal editor tab — the
+  // file-explorer/command-palette paths keep using openContentHit/openFileTab.
+  useEffect(() => {
+    setTerminalFileOpener(openContentHitSide);
+    return () => setTerminalFileOpener(null);
+  }, [openContentHitSide]);
+  useEffect(() => {
+    setHerdrWorktreeRoot(herdrWorktree);
+  }, [herdrWorktree]);
 
   const insertHistoryCommand = useMemo(
     () =>
@@ -1114,6 +1262,7 @@ export default function App() {
 
           <main className="zoom-content flex min-h-0 flex-1 flex-col">
             <ResizablePanelGroup
+              groupRef={contentGroupRef}
               orientation="horizontal"
               className="min-h-0 flex-1"
             >
@@ -1171,7 +1320,7 @@ export default function App() {
                 <div className="flex h-full min-h-0 flex-col">
                   <div className="relative min-h-0 flex-1">
                     <WorkspaceSurface
-                      tabs={tabs}
+                      tabs={centerTabs}
                       activeId={activeId}
                       activeTab={activeTab}
                       registerTerminalHandle={registerTerminalHandle}
@@ -1205,6 +1354,23 @@ export default function App() {
                   />
                 </div>
               </ResizablePanel>
+              {sideTabs.map((t) => (
+                <Fragment key={t.id}>
+                  <ResizableHandle withHandle />
+                  <ResizablePanel
+                    id={`side-file-${t.id}`}
+                    defaultSize="32%"
+                    minSize="15%"
+                  >
+                    <SideEditorColumn
+                      tab={t}
+                      registerHandle={registerEditorHandle}
+                      onDirtyChange={handleEditorDirty}
+                      onClose={() => void handleClose(t.id)}
+                    />
+                  </ResizablePanel>
+                </Fragment>
+              ))}
             </ResizablePanelGroup>
           </main>
 

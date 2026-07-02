@@ -55,6 +55,8 @@ function readSidebarCollapsed(): boolean {
 type FocusableExplorer = {
   focus: () => void;
   isFocused: () => boolean;
+  focusSearch: () => void;
+  toggleSearch: () => void;
 };
 
 export function useSidebarPanel(
@@ -171,6 +173,24 @@ export function useSidebarPanel(
     explorer.focus();
   }, [explorerRef, persistSidebarView, sidebarView]);
 
+  // Global search (Cmd+Shift+F), single owner. When the sidebar is showing
+  // Source Control (or is collapsed) the explorer isn't mounted, so switch to
+  // it, expand if collapsed, then open + focus the search box once it mounts.
+  // When the explorer is already the visible view, toggle its search (a repeat
+  // press closes it) — the explorer no longer registers this shortcut itself,
+  // so there's exactly one handler and no registration-order ambiguity.
+  const openExplorerSearch = useCallback(() => {
+    const panel = sidebarRef.current;
+    const collapsed = panel ? panel.getSize().asPercentage <= 0 : false;
+    if (sidebarView !== "explorer" || collapsed) {
+      if (panel && collapsed) panel.resize(`${sidebarWidthRef.current}px`);
+      if (sidebarView !== "explorer") persistSidebarView("explorer");
+      requestAnimationFrame(() => explorerRef.current?.focusSearch());
+      return;
+    }
+    explorerRef.current?.toggleSearch();
+  }, [explorerRef, persistSidebarView, sidebarView]);
+
   return {
     sidebarRef,
     sidebarWidthRef,
@@ -182,5 +202,6 @@ export function useSidebarPanel(
     cycleSidebarView,
     persistSidebarWidth,
     toggleExplorerFocus,
+    openExplorerSearch,
   };
 }

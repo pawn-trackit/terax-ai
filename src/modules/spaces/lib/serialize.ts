@@ -78,6 +78,9 @@ function serializeTab(tab: Tab): SerializedTab | null {
         ...(tab.customTitle !== undefined && { customTitle: tab.customTitle }),
       };
     case "editor":
+      // Right-side-panel columns are ephemeral (like the old sideFiles) — never
+      // persist them, so they don't reappear as columns on relaunch.
+      if (tab.sidePanel) return null;
       return { kind: "editor", path: tab.path };
     case "preview":
       return { kind: "preview", url: tab.url };
