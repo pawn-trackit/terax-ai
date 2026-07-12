@@ -29,6 +29,24 @@ export const POOL_MAX_SIZE = 5;
 const PTY_RESIZE_DEBOUNCE_MS = 100;
 const SNAPSHOT_SCROLLBACK_CAP = 5_000;
 
+// Keys that terminate an IME composition so the deferred syllable must be
+// committed to the PTY before the key itself is handled. Deliberately an
+// explicit allowlist: composition keydowns on the affected WebKit are NOT
+// tagged with keyCode 229, so any broader test would flush mid-syllable.
+const IME_COMMIT_KEYS = new Set([
+  "Enter",
+  "Tab",
+  "Escape",
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "Home",
+  "End",
+  "PageUp",
+  "PageDown",
+]);
+
 export type SlotAdapter = {
   resolveLeaf(leafId: number): LeafBridge | null;
   evictLeaf(leafId: number): void;
@@ -65,6 +83,13 @@ export type Slot = {
   // only if another leaf steals the slot.
   retainedLeafId: number | null;
   parked: boolean;
+  // State for reconstructing IME composition on WebKit builds that never fire
+  // DOM composition events (see the input listeners in createSlot). imePending
+  // holds the syllable being composed; imeSawComposition latches true once real
+  // composition events fire, disabling the workaround on normal WebKit.
+  imePending: string | null;
+  imeSawComposition: boolean;
+  imeSuppressOnData: boolean;
   oscDisposers: (() => void)[];
   observer: ResizeObserver | null;
   fitTimer: ReturnType<typeof setTimeout> | null;
@@ -449,6 +474,9 @@ function createSlot(): Slot {
     currentLeafId: null,
     retainedLeafId: null,
     parked: false,
+    imePending: null,
+    imeSawComposition: false,
+    imeSuppressOnData: false,
     oscDisposers: [],
     observer: null,
     fitTimer: null,
@@ -464,7 +492,122 @@ function createSlot(): Slot {
     lastUsedAt: 0,
   };
 
+  // Some macOS WebKit + Korean input-source combinations never fire DOM
+  // composition events. Instead each syllable arrives as a bare-jamo
+  // `insertText` (which xterm forwards to the PTY immediately) followed by
+  // `insertReplacementText` events that refine it into the finished syllable
+  // (which xterm ignores). The shell therefore receives only initial
+  // consonants. We reconstruct the missing composition lifecycle from these
+  // input events: drop the bare-jamo send, track the refined syllable, and
+  // emit the finished syllable when the next syllable starts or input ends.
+  // Latched off the moment real composition events fire (normal WebKit).
+  const imeSend = (text: string) => {
+    const leafId = slot.currentLeafId;
+    if (leafId !== null && text) adapter?.resolveLeaf(leafId)?.writeToPty(text);
+  };
+  const imeFlush = () => {
+    if (slot.imePending !== null) {
+      imeSend(slot.imePending);
+      slot.imePending = null;
+    }
+    imeHideOverlay();
+  };
+  const isHangul = (s: string) =>
+    /[ᄀ-ᇿ㄰-㆏가-힣]/.test(s);
+
+  // Because no composition events fire, xterm never shows its composing-text
+  // overlay either. Drive that overlay ourselves so the in-progress syllable is
+  // visible at the cursor instead of appearing only once it commits.
+  const imeShowOverlay = (text: string) => {
+    const el = host.querySelector<HTMLElement>(".composition-view");
+    const screen = host.querySelector<HTMLElement>(".xterm-screen");
+    if (!el || !screen) return;
+    const cols = term.cols || 1;
+    const rows = term.rows || 1;
+    const cellW = screen.clientWidth / cols;
+    const cellH = screen.clientHeight / rows;
+    const cx = Math.min(term.buffer.active.cursorX, cols - 1);
+    const cy = term.buffer.active.cursorY;
+    el.textContent = text;
+    el.style.left = cx * cellW + "px";
+    el.style.top = cy * cellH + "px";
+    el.style.height = cellH + "px";
+    el.style.lineHeight = cellH + "px";
+    el.style.fontFamily = String(term.options.fontFamily ?? "");
+    el.style.fontSize = `${term.options.fontSize ?? 14}px`;
+    el.classList.add("active");
+  };
+  const imeHideOverlay = () => {
+    const el = host.querySelector<HTMLElement>(".composition-view");
+    if (el) {
+      el.textContent = "";
+      el.classList.remove("active");
+    }
+  };
+
+  const imeTextarea = term.textarea;
+  if (imeTextarea) {
+    const markComposition = () => {
+      slot.imeSawComposition = true;
+    };
+    imeTextarea.addEventListener("compositionstart", markComposition, true);
+    imeTextarea.addEventListener("compositionupdate", markComposition, true);
+    imeTextarea.addEventListener("compositionend", markComposition, true);
+
+    imeTextarea.addEventListener(
+      "beforeinput",
+      (e: InputEvent) => {
+        if (slot.imeSawComposition) return; // normal WebKit: leave xterm alone
+        slot.imeSuppressOnData = false;
+        const data = e.data;
+        if (e.inputType === "insertReplacementText") {
+          if (data) {
+            slot.imePending = data; // refined syllable so far
+            imeShowOverlay(data);
+          }
+          return;
+        }
+        if (
+          e.inputType === "insertText" &&
+          data &&
+          data.length === 1 &&
+          isHangul(data)
+        ) {
+          imeFlush(); // previous syllable is now final → emit it
+          slot.imePending = data; // defer this bare jamo
+          slot.imeSuppressOnData = true; // drop xterm's imminent send of it
+          imeShowOverlay(data);
+          return;
+        }
+        imeFlush(); // any other input (space, ascii, …) commits pending
+      },
+      true,
+    );
+
+    imeTextarea.addEventListener("blur", imeFlush, true);
+  }
+
+  // A committed syllable reaches the cursor only after the PTY echoes it back
+  // (async), so an overlay drawn the instant the next syllable starts lands one
+  // cell behind. Re-anchor it whenever the cursor actually moves.
+  term.onCursorMove(() => {
+    if (slot.imePending !== null) imeShowOverlay(slot.imePending);
+  });
+
   term.attachCustomKeyEventHandler((event) => {
+    // Commit a deferred IME syllable before a terminator key (Enter, arrows,
+    // Ctrl/Cmd combos, …) is handled, so the composed text lands ahead of the
+    // control sequence. Restricted to an explicit key allowlist because stray
+    // composition keydowns are not tagged 229 and must not flush mid-syllable.
+    if (
+      event.type === "keydown" &&
+      slot.imePending !== null &&
+      (IME_COMMIT_KEYS.has(event.key) ||
+        ((event.ctrlKey || event.metaKey) && event.key.length === 1))
+    ) {
+      imeFlush();
+    }
+
     // During IME composition the browser is assembling a multi-keystroke
     // character (Chinese pinyin → hanzi, Korean jamo → syllable, etc.).
     // Raw keydown events — including the Enter that commits a candidate —
@@ -525,6 +668,17 @@ function createSlot(): Slot {
   });
 
   term.onData((data) => {
+    // Bare-jamo insertText already handled by the IME composition workaround.
+    if (slot.imeSuppressOnData) {
+      slot.imeSuppressOnData = false;
+      return;
+    }
+    // A real character (space, ascii) that xterm sends directly must not
+    // overtake a syllable still being composed — commit the syllable first.
+    // Escape sequences (mouse, cursor reports, arrows) are left untouched.
+    if (slot.imePending !== null && data && !data.startsWith("\x1b")) {
+      imeFlush();
+    }
     const leafId = slot.currentLeafId;
     if (leafId === null) return;
     adapter?.resolveLeaf(leafId)?.writeToPty(data);
